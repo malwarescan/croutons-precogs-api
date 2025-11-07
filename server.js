@@ -10,6 +10,20 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
+// Optional Redis test endpoint (remove after verification)
+app.get("/health/redis", async (_req, res) => {
+  try {
+    if (!process.env.REDIS_URL) {
+      return res.json({ ok: false, error: "REDIS_URL not set" });
+    }
+    const { testRedis } = await import("./src/redis.js");
+    const result = await testRedis();
+    res.json({ ok: result, redis: process.env.REDIS_URL ? "configured" : "not configured" });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Minimal /v1/invoke + /v1/jobs/:id/events stubs
 const jobs = new Map(); // in-memory for now
 app.post("/v1/invoke", (req, res) => {
