@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS precogs.events (
 );
 
 CREATE INDEX IF NOT EXISTS precogs_events_job_ts_idx ON precogs.events(job_id, ts);
+CREATE INDEX IF NOT EXISTS precogs_events_job_id_idx ON precogs.events(job_id, id);
 CREATE INDEX IF NOT EXISTS precogs_jobs_status_idx ON precogs.jobs(status);
 CREATE INDEX IF NOT EXISTS precogs_jobs_precog_idx ON precogs.jobs(precog);
 

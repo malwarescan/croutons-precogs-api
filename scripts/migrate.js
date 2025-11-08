@@ -22,6 +22,9 @@ const pool = new Pool({
 
   const client = await pool.connect();
   try {
+    // Ensure precogs schema exists first
+    await client.query(`CREATE SCHEMA IF NOT EXISTS precogs;`);
+    
     // Ensure migrations table exists
     await client.query(`
       CREATE TABLE IF NOT EXISTS precogs.schema_migrations (

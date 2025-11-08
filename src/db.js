@@ -67,7 +67,7 @@ export async function insertEvent(jobId, type, data) {
 
 export async function getJobEvents(jobId, limit = 1000) {
   const { rows } = await pool.query(
-    `SELECT type, data, ts
+    `SELECT id, type, data, ts
      FROM precogs.events
      WHERE job_id = $1
      ORDER BY ts ASC

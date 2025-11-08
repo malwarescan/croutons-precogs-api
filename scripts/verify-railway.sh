@@ -20,9 +20,14 @@ echo ""
 echo ""
 
 echo "3) Invoke stub endpoint:"
-curl -sS "${RAILWAY_URL}/v1/invoke" \
+RESPONSE=$(curl -sS "${RAILWAY_URL}/v1/invoke" \
   -H 'content-type: application/json' \
-  -d '{"precog":"schema","prompt":"demo","stream":true}' | jq .
+  -d '{"precog":"schema","prompt":"demo","stream":true}')
+if command -v jq &> /dev/null; then
+  echo "$RESPONSE" | jq .
+else
+  echo "$RESPONSE"
+fi
 echo ""
 echo ""
 
