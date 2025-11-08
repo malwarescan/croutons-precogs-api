@@ -306,6 +306,122 @@ app.get("/metrics", async (_req, res) => {
   }
 });
 
+// GET /v1/run.ndjson - Create job and stream events as NDJSON
+app.get("/v1/run.ndjson", async (req, res) => {
+  try {
+    // Optional auth (header OR ?token= for browser)
+    if (process.env.API_KEY) {
+      const hdr = req.headers.authorization || "";
+      const qtk = req.query.token ? `Bearer ${req.query.token}` : "";
+      const expected = `Bearer ${process.env.API_KEY}`;
+      
+      if (hdr !== expected && qtk !== expected) {
+        return res.status(401).json({ ok: false, error: "unauthorized" });
+      }
+    }
+
+    const precog = req.query.precog || "schema";
+    const task = req.query.task || `Run ${precog}`;
+    const ctx = {};
+    if (req.query.url) ctx.url = req.query.url;
+    if (req.query.type) ctx.type = req.query.type;
+
+    // Create job
+    const job = await insertJob(precog, task, ctx);
+    
+    // Enqueue job to Redis Stream
+    if (process.env.REDIS_URL) {
+      try {
+        await enqueueJob(job.id, precog, task, ctx);
+      } catch (redisErr) {
+        console.error("[run.ndjson] Redis enqueue failed:", redisErr.message);
+        // Continue anyway - job is in DB
+      }
+    }
+
+    // NDJSON stream headers
+    res.set({
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Transfer-Encoding": "chunked",
+      "X-Accel-Buffering": "no", // Disable nginx buffering
+    });
+
+    // Helper to write one NDJSON line
+    const line = (obj) => {
+      try {
+        res.write(JSON.stringify(obj) + "\n");
+      } catch (e) {
+        // Client disconnected
+        return false;
+      }
+      return true;
+    };
+
+    // Send initial ack
+    if (!line({ type: "ack", job_id: job.id })) return;
+
+    // Poll DB events and write each as NDJSON
+    let lastId = 0;
+    let open = true;
+    req.on("close", () => {
+      open = false;
+    });
+
+    // Heartbeat keeps proxies from closing idle streams
+    const hb = setInterval(() => {
+      if (open) line({ type: "heartbeat" });
+    }, 15000);
+
+    try {
+      while (open) {
+        const rows = await getJobEvents(job.id, 1000);
+        
+        for (const r of rows) {
+          if (!open) break;
+          
+          const eventId = Number(r.id);
+          if (eventId > lastId) {
+            lastId = eventId;
+            
+            // Parse JSONB data if it's a string
+            const data = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            
+            if (!line({ type: r.type, data: data, ts: r.ts })) {
+              open = false;
+              break;
+            }
+          }
+        }
+
+        const j = await getJob(job.id);
+        if (j && (j.status === "done" || j.status === "error" || j.status === "cancelled")) {
+          line({ type: "complete", status: j.status, error: j.error || null });
+          break;
+        }
+
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    } catch (e) {
+      line({ type: "error", message: String(e?.message || e) });
+    } finally {
+      clearInterval(hb);
+      res.end();
+    }
+  } catch (e) {
+    console.error("[run.ndjson] Error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// GET /run - Convenience redirect to NDJSON endpoint
+app.get("/run", (req, res) => {
+  const target = "/v1/run.ndjson";
+  const q = new URLSearchParams(req.query).toString();
+  res.redirect(`${target}?${q}`);
+});
+
 // Serve /runtime (static UI to run directives later)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use("/runtime", express.static(path.join(__dirname, "runtime")));

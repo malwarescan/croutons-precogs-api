@@ -1,0 +1,72 @@
+<!doctype html><meta charset="utf-8">
+<title>Precogs • NDJSON Stream</title>
+<style>
+  body{margin:0;background:#0b0d12;color:#e6e9ef;font:14px ui-monospace}
+  .wrap{padding:16px;max-width:900px;margin:auto}
+  pre{white-space:pre-wrap;line-height:1.45;border:1px solid #1c212b;border-radius:12px;padding:12px}
+  .chip{display:inline-block;padding:2px 8px;border:1px solid #2a2f3a;border-radius:999px;margin:2px}
+</style>
+<div class="wrap">
+  <h3>Precogs • NDJSON Stream</h3>
+  <div id="meta"></div>
+  <pre id="out"></pre>
+</div>
+<script>
+(async function(){
+  const p = new URLSearchParams(location.search);
+  const precog = p.get('precog') || 'schema';
+  const task   = p.get('task')   || `Run ${precog}`;
+  const url    = p.get('url')    || '';
+  const type   = p.get('type')   || '';
+  const token  = p.get('token')  || '';
+
+  document.getElementById('meta').innerHTML =
+    `<span class="chip">precog: <b>${precog}</b></span>`+
+    (url? `<span class="chip">url: <b>${url}</b></span>`:'')+
+    (type?`<span class="chip">type: <b>${type}</b></span>`:'')+
+    `<span class="chip">task: <b>${task}</b></span>`;
+
+  const out = document.getElementById('out');
+  const append = (t)=>{ out.textContent += t; out.scrollTop = out.scrollHeight; };
+
+  // Start the NDJSON run (this endpoint both enqueues and streams)
+  const qs = new URLSearchParams();
+  qs.set('precog', precog);
+  if (url) qs.set('url', url);
+  if (type) qs.set('type', type);
+  qs.set('task', task);
+  if (token) qs.set('token', token);
+
+  const resp = await fetch(`/v1/run.ndjson?${qs.toString()}`, {
+    headers: token ? { authorization: `Bearer ${token}` } : {}
+  });
+
+  if (!resp.ok || !resp.body) { append(`Error: ${resp.status}`); return; }
+
+  // Stream parse NDJSON in browser
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).trim(); buf = buf.slice(idx+1);
+      if (!line) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (obj.type === 'answer.delta') append(obj.data?.text || '');
+        else if (obj.type === 'reasoning.delta') append(obj.data?.text || '');
+        else if (obj.type === 'grounding.chunk') append(`\n[grounding] ${JSON.stringify(obj.data)}\n`);
+        else if (obj.type === 'complete') append(`\n[${obj.status}]`);
+        else if (obj.type === 'error') append(`\n[error] ${obj.message}`);
+        else if (obj.type === 'ack') append(`[job: ${obj.job_id}]\n`);
+        // Skip heartbeat
+      } catch(e){ append(`\n[parse] ${line}`); }
+    }
+  }
+})();
+</script>
+
