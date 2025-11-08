@@ -1,0 +1,58 @@
+<!doctype html><meta charset="utf-8">
+<title>Precogs • Oracle CLI</title>
+<style>
+html,body{margin:0;background:#0a0d11;color:#d1e0ff;font:13px "SF Mono",monospace;height:100%}
+#term{white-space:pre-wrap;padding:14px;overflow:auto;height:100%;box-sizing:border-box}
+.prompt{color:#7bf}
+.cmd{color:#ffb86c}
+.result{color:#fff}
+</style>
+<div id="term"></div>
+<script>
+(async function(){
+  const term=document.getElementById('term');
+  const p=new URLSearchParams(location.search);
+  const precog=p.get('precog')||'schema';
+  const task=p.get('task')||'Analyze current context';
+  const url=p.get('url')||'';
+  const token=p.get('token')||'';
+  const qs=new URLSearchParams({precog,task});
+  if(url)qs.set('url',url);
+  if(token)qs.set('token',token);
+
+  const print=(t,cls='result')=>{
+    const line=document.createElement('div');
+    line.className=cls;
+    line.textContent=t;
+    term.appendChild(line);
+    term.scrollTop=term.scrollHeight;
+  };
+
+  print(`Precogs Oracle [${precog}]`);
+  print(`> ${task}`,'cmd');
+  print('─'.repeat(50));
+
+  const resp=await fetch(`/v1/run.ndjson?${qs}`,{headers: token?{authorization:`Bearer ${token}`}:{}});
+
+  if(!resp.ok||!resp.body){print(`Error ${resp.status}`);return;}
+  const reader=resp.body.getReader();const dec=new TextDecoder();let buf='';
+  while(true){
+    const {done,value}=await reader.read();if(done)break;
+    buf+=dec.decode(value,{stream:true});
+    let idx;while((idx=buf.indexOf('\n'))>=0){
+      const line=buf.slice(0,idx).trim();buf=buf.slice(idx+1);
+      if(!line)continue;
+      try{
+        const j=JSON.parse(line);
+        if(j.type==='ack')print(`job_id: ${j.job_id}`,'prompt');
+        else if(j.type==='grounding.chunk')print(`grounding → ${JSON.stringify(j.data)}`);
+        else if(j.type==='answer.delta')print(j.data.text);
+        else if(j.type==='reasoning.delta')print(j.data.text);
+        else if(j.type==='complete')print(`✔ done (${j.status})`,'prompt');
+        else if(j.type==='error')print(`⚠ ${j.message}`,'prompt');
+      }catch(e){print(line);}
+    }
+  }
+})();
+</script>
+

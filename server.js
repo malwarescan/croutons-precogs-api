@@ -422,6 +422,12 @@ app.get("/run", (req, res) => {
   res.redirect(`${target}?${q}`);
 });
 
+// GET /cli - Convenience redirect to CLI viewer
+app.get("/cli", (req, res) => {
+  const q = new URLSearchParams(req.query).toString();
+  res.redirect(`/runtime/cli.html?${q}`);
+});
+
 // Serve /runtime (static UI to run directives later)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use("/runtime", express.static(path.join(__dirname, "runtime")));
