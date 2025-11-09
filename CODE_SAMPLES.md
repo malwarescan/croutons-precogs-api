@@ -6,9 +6,13 @@ Real-world examples for reference and comparison with our Precogs implementation
 
 ## Example 1: Official OpenAI Node.js Example
 
-**Source:** [openai-node repository](https://github.com/openai/openai-node) - `examples/function-call-stream.ts`
+**Source:** 
+- [openai-node repository](https://github.com/openai/openai-node) - `examples/function-call-stream.ts`
+- GitHub gist: openai-node example "function-call-stream.ts"
 
 **Key Pattern:** Basic streaming + function calling with argument accumulation
+
+**Reference:** Demonstrates accumulating function call arguments while streaming
 
 ```typescript
 import OpenAI from "openai";
@@ -97,9 +101,13 @@ for await (const chunk of completion) {
 
 ## Example 2: Community Discussion - Chunk Accumulation
 
-**Source:** OpenAI Community Forum - "How to properly handle the function call in assistant streaming (Node.js)"
+**Source:** 
+- OpenAI Community Forum - "How to properly handle the function call in assistant streaming (Node.js)"
+- Developer community thread: "Function calls and streaming"
 
 **Key Pattern:** Event-based handling with tool call deltas
+
+**Reference:** Covers edge-cases when using streaming + function calling
 
 ```javascript
 .on('toolCallDelta', toolCallDelta => {
@@ -124,9 +132,13 @@ for await (const chunk of completion) {
 
 ## Example 3: SSE Streaming Pattern
 
-**Source:** OpenFaaS blog - "Stream OpenAI responses from functions using Server Sent Events (SSE)"
+**Source:** 
+- OpenFaaS blog - "Stream OpenAI responses from functions using Server Sent Events (SSE)"
+- Blog article: "Streaming OpenAI Assistant API Asynchronously with Function Calling in FastAPI"
 
 **Key Pattern:** SSE formatting for browser streaming
+
+**Reference:** Real-world FastAPI + streaming integration
 
 ```python
 def stream():
@@ -296,16 +308,46 @@ Based on these examples, verify:
 
 ---
 
-## References
+## Additional References
 
-1. **Official Example:** [openai-node function-call-stream.ts](https://github.com/openai/openai-node/blob/main/examples/function-call-stream.ts)
-2. **Community Discussion:** OpenAI Forum - Function call streaming
-3. **SSE Pattern:** OpenFaaS blog - SSE streaming
-4. **Basic Streaming:** January.sh - Real-time streaming
-5. **Function Calling:** YAV-AI NodeJS-OpenAI-Function-Calling-Example
+### Official Documentation
+
+- **OpenAI Streaming API Docs:** https://platform.openai.com/docs/api-reference/streaming
+  - Covers how streaming works
+  - Chunk format and structure
+  - Function calling with streaming
+
+### Code Repositories (Pending)
+
+**Status:** Awaiting download links for 5 full sample repositories
+
+**What Will Be Included:**
+- Complete working examples
+- Annotated changes for Precogs workflow
+- Production-ready patterns
+- Error handling examples
+- Client-side consumption examples
+
+**When Available:**
+- Download links will be added here
+- Each repository will be documented with adaptation notes
+- Code comparisons will be added to `ADAPTATION_GUIDE.md`
 
 ---
 
-**Status:** Examples documented and compared  
+## References
+
+1. **Official Example:** [openai-node function-call-stream.ts](https://github.com/openai/openai-node/blob/main/examples/function-call-stream.ts)
+2. **GitHub Gist:** openai-node example "function-call-stream.ts" - Accumulating arguments while streaming
+3. **Community Discussion:** Developer thread - "Function calls and streaming" - Edge-cases
+4. **Blog Article:** "Streaming OpenAI Assistant API Asynchronously with Function Calling in FastAPI" - Real-world integration
+5. **OpenAI Docs:** Streaming API responses - Official documentation
+6. **SSE Pattern:** OpenFaaS blog - SSE streaming
+7. **Basic Streaming:** January.sh - Real-time streaming
+8. **Function Calling:** YAV-AI NodeJS-OpenAI-Function-Calling-Example
+
+---
+
+**Status:** Examples documented and compared, awaiting repository downloads  
 **Last Updated:** $(date)
 

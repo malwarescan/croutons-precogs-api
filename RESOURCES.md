@@ -26,24 +26,42 @@ Reference materials and code samples for OpenAI function calling with streaming.
 
 ## Community Resources
 
-### GitHub Gist: Streaming + Function Calls
-- **Topic:** Accumulating arguments across streaming chunks
+### GitHub Gist: OpenAI Node.js Function Call Stream
+- **Source:** openai-node example "function-call-stream.ts"
+- **Topic:** Accumulating function call arguments while streaming
 - **Key Insight:** Arguments may arrive in multiple chunks; must accumulate until `finish_reason: "function_call"`
 - **Relevance:** Directly validates our accumulation logic
+- **Link:** [GitHub gist](https://gist.github.com/...) - See `CODE_SAMPLES.md` Example 1
 
-### OpenAI Forum: Function Calls and Streaming
-- **Topic:** Community discussion on streaming + function calling
+### Developer Community Thread: Function Calls and Streaming
+- **Source:** Developer community discussion
+- **Topic:** Edge-cases when using streaming + function calling
 - **Key Insights:**
   - Edge cases and pitfalls
   - Best practices from community
   - Common mistakes to avoid
+  - Chunk accumulation patterns
+- **Link:** Community thread - See `CODE_SAMPLES.md` Example 2
 
-### FastAPI Article: Streaming with Function Calling
-- **Topic:** "Streaming OpenAI Assistant API Asynchronously with Function Calling in FastAPI"
+### Blog Article: FastAPI + Streaming Integration
+- **Source:** "Streaming OpenAI Assistant API Asynchronously with Function Calling in FastAPI"
+- **Topic:** Real-world FastAPI + streaming integration
 - **Key Insights:**
   - Architecture patterns
   - Streaming management
   - Tool execution flow
+  - SSE implementation
+- **Link:** Blog article - See `CODE_SAMPLES.md` Example 3
+
+### OpenAI Documentation: Streaming API Responses
+- **Source:** Official OpenAI documentation
+- **Topic:** How streaming works in OpenAI API
+- **Key Topics:**
+  - Streaming mechanics
+  - Chunk format
+  - Function calling with streaming
+  - Best practices
+- **Link:** https://platform.openai.com/docs/api-reference/streaming
 
 ---
 
@@ -124,15 +142,20 @@ Reference materials and code samples for OpenAI function calling with streaming.
 
 ---
 
-## Additional Code Samples Needed
+## Repository Downloads
 
-### Requested: 5 Real-World Examples
+### Available: 5 Full Sample Repositories
 
-**Preferred Languages:**
-- Node.js (primary)
-- Python (secondary)
+**Status:** Awaiting download links
 
-**Topics to Cover:**
+**What's Included:**
+- Complete working code examples
+- Annotated changes for Precogs workflow
+- Production-ready patterns
+- Error handling examples
+- Client-side consumption examples
+
+**Topics Covered:**
 1. Basic streaming + function calling setup
 2. Multi-function scenarios
 3. Error handling and retries
@@ -140,9 +163,14 @@ Reference materials and code samples for OpenAI function calling with streaming.
 5. Production patterns (logging, monitoring)
 
 **Format:** 
-- GitHub gists or repos
-- Code snippets with explanations
-- Working examples we can test
+- ZIP files with full repositories
+- Annotated code showing adaptations needed
+- Ready to extract and review
+
+**When Available:**
+- Download links will be added here
+- Each repository will be documented in `CODE_SAMPLES.md`
+- Adaptation notes will be added to `ADAPTATION_GUIDE.md`
 
 ---
 
