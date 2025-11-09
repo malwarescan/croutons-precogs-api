@@ -109,13 +109,16 @@ app.post("/v1/invoke", requireAuth, rateLimit, async (req, res) => {
       return res.status(400).json({ ok: false, error: "precog required" });
     }
 
+    // Default prompt if not provided
+    const jobPrompt = prompt || `Run ${precog}`;
+
     // Insert job into database (status=pending)
-    const job = await insertJob(precog, prompt, context || {});
+    const job = await insertJob(precog, jobPrompt, context || {});
 
     // Enqueue job to Redis Stream
     if (process.env.REDIS_URL) {
       try {
-        await enqueueJob(job.id, precog, prompt, context || {});
+        await enqueueJob(job.id, precog, jobPrompt, context || {});
       } catch (redisErr) {
         console.error("[invoke] Redis enqueue failed:", redisErr.message);
         // Continue anyway - job is in DB, worker can poll DB if needed
