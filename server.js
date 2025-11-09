@@ -428,6 +428,75 @@ app.get("/cli", (req, res) => {
   res.redirect(`/runtime/cli.html?${q}`);
 });
 
+// POST /v1/chat - OpenAI function calling with streaming
+app.post("/v1/chat", async (req, res) => {
+  try {
+    // Optional auth check
+    if (process.env.API_KEY) {
+      const authHeader = req.get("Authorization");
+      const token = req.query.token;
+      const expected = `Bearer ${process.env.API_KEY}`;
+      
+      if (authHeader !== expected && token !== process.env.API_KEY) {
+        return res.status(401).json({ ok: false, error: "Authorization required" });
+      }
+    }
+
+    const { message, history = [], model, temperature, max_tokens } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ ok: false, error: "message is required" });
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(503).json({ 
+        ok: false, 
+        error: "OpenAI integration not configured. OPENAI_API_KEY not set." 
+      });
+    }
+
+    // Set up SSE headers
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    // Import dynamically (only if OPENAI_API_KEY is set)
+    const { callWithFunctionCalling } = await import("./src/integrations/openai-chat.js");
+
+    // Stream responses
+    try {
+      for await (const chunk of callWithFunctionCalling(message, history, {
+        model: model || "gpt-4",
+        temperature: temperature || 0.7,
+        maxTokens: max_tokens || 2000,
+      })) {
+        // Send chunk as SSE
+        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+
+        // Handle client disconnect
+        if (req.aborted) {
+          break;
+        }
+      }
+    } catch (streamError) {
+      res.write(`data: ${JSON.stringify({ type: "error", error: streamError.message })}\n\n`);
+    }
+
+    res.end();
+  } catch (e) {
+    console.error("[chat] Error:", e);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: e.message });
+    } else {
+      res.write(`data: ${JSON.stringify({ type: "error", error: e.message })}\n\n`);
+      res.end();
+    }
+  }
+});
+
 // Serve /runtime (static UI to run directives later)
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use("/runtime", express.static(path.join(__dirname, "runtime")));
