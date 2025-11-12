@@ -6,52 +6,132 @@ html,body{margin:0;background:#0a0d11;color:#d1e0ff;font:13px "SF Mono",monospac
 .prompt{color:#7bf}
 .cmd{color:#ffb86c}
 .result{color:#fff}
+#input-area{position:fixed;bottom:0;left:0;right:0;background:#0a0d11;border-top:1px solid #1a1d21;padding:8px;display:none}
+#content-input{width:100%;min-height:60px;background:#1a1d21;border:1px solid #2a2d31;color:#d1e0ff;font:13px "SF Mono",monospace;padding:8px;box-sizing:border-box}
+button{background:#2a2d31;border:1px solid #3a3d41;color:#d1e0ff;padding:4px 8px;margin:4px 0;cursor:pointer}
+button:hover{background:#3a3d41}
 </style>
 <div id="term"></div>
+<div id="input-area">
+  <textarea id="content-input" placeholder="Paste HTML/JSON-LD content here, then press Enter or click Submit"></textarea>
+  <button onclick="submitInline()">Submit</button>
+  <button onclick="toggleInput()">Cancel</button>
+</div>
 <script>
-(async function(){
-  const term=document.getElementById('term');
-  const p=new URLSearchParams(location.search);
-  const precog=p.get('precog')||'schema';
-  const task=p.get('task')||'Analyze current context';
-  const url=p.get('url')||'';
-  const token=p.get('token')||'';
-  const qs=new URLSearchParams({precog,task});
-  if(url)qs.set('url',url);
-  if(token)qs.set('token',token);
+const term=document.getElementById('term');
+const p=new URLSearchParams(location.search);
+const precog=p.get('precog')||'schema';
+const task=p.get('task')||'validate';
+const url=p.get('url')||'';
+const token=p.get('token')||'';
 
-  const print=(t,cls='result')=>{
-    const line=document.createElement('div');
-    line.className=cls;
-    line.textContent=t;
-    term.appendChild(line);
-    term.scrollTop=term.scrollHeight;
-  };
+const print=(t,cls='result')=>{
+  const line=document.createElement('div');
+  line.className=cls;
+  line.textContent=t;
+  term.appendChild(line);
+  term.scrollTop=term.scrollHeight;
+};
 
-  print(`Precogs Oracle [${precog}]`);
-  print(`> ${task}`,'cmd');
+function toggleInput() {
+  const area = document.getElementById('input-area');
+  area.style.display = area.style.display === 'none' ? 'block' : 'none';
+}
+
+document.getElementById('content-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.ctrlKey) {
+    submitInline();
+  }
+});
+
+async function submitInline() {
+  const content = document.getElementById('content-input').value.trim();
+  if (!content) {
+    print('⚠ No content provided', 'prompt');
+    return;
+  }
+
+  print(`Precogs Oracle [${precog}] - Inline Mode`, 'prompt');
+  print(`> ${task}`, 'cmd');
   print('─'.repeat(50));
+  toggleInput();
 
-  const resp=await fetch(`/v1/run.ndjson?${qs}`,{headers: token?{authorization:`Bearer ${token}`}:{}});
+  try {
+    const body = {
+      precog: precog,
+      kb: 'schema-foundation',
+      content_source: 'inline',
+      content: content,
+      type: 'Service',
+      task: task,
+    };
 
-  if(!resp.ok||!resp.body){print(`Error ${resp.status}`);return;}
-  const reader=resp.body.getReader();const dec=new TextDecoder();let buf='';
-  while(true){
-    const {done,value}=await reader.read();if(done)break;
-    buf+=dec.decode(value,{stream:true});
-    let idx;while((idx=buf.indexOf('\n'))>=0){
-      const line=buf.slice(0,idx).trim();buf=buf.slice(idx+1);
-      if(!line)continue;
-      try{
-        const j=JSON.parse(line);
-        if(j.type==='ack')print(`job_id: ${j.job_id}`,'prompt');
-        else if(j.type==='grounding.chunk')print(`grounding → ${JSON.stringify(j.data)}`);
-        else if(j.type==='answer.delta')print(j.data.text);
-        else if(j.type==='reasoning.delta')print(j.data.text);
-        else if(j.type==='complete')print(`✔ done (${j.status})`,'prompt');
-        else if(j.type==='error')print(`⚠ ${j.message}`,'prompt');
-      }catch(e){print(line);}
+    const resp = await fetch('/v1/run.ndjson', {
+      method: 'POST',
+      headers: Object.assign({'content-type':'application/json'}, token ? {authorization:`Bearer ${token}`} : {}),
+      body: JSON.stringify(body)
+    });
+
+    if(!resp.ok||!resp.body){print(`Error ${resp.status}`);return;}
+    const reader=resp.body.getReader();const dec=new TextDecoder();let buf='';
+    while(true){
+      const {done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let idx;while((idx=buf.indexOf('\n'))>=0){
+        const line=buf.slice(0,idx).trim();buf=buf.slice(idx+1);
+        if(!line)continue;
+        try{
+          const j=JSON.parse(line);
+          if(j.type==='ack')print(`job_id: ${j.job_id}`,'prompt');
+          else if(j.type==='grounding.chunk')print(`grounding → ${JSON.stringify(j.data)}`);
+          else if(j.type==='answer.delta')print(j.data.text);
+          else if(j.type==='reasoning.delta')print(j.data.text);
+          else if(j.type==='complete')print(`✔ done (${j.status})`,'prompt');
+          else if(j.type==='error')print(`⚠ ${j.message}`,'prompt');
+        }catch(e){print(line);}
+      }
     }
+  } catch (e) {
+    print(`⚠ Error: ${e.message}`, 'prompt');
+  }
+}
+
+// Auto-run if URL present (legacy mode), otherwise show input
+(async function(){
+  if(url){
+    print(`Precogs Oracle [${precog}]`);
+    print(`> ${task}`,'cmd');
+    print('─'.repeat(50));
+
+    const qs=new URLSearchParams({precog,task,url});
+    if(token)qs.set('token',token);
+
+    const resp=await fetch(`/v1/run.ndjson?${qs}`,{headers: token?{authorization:`Bearer ${token}`}:{}});
+
+    if(!resp.ok||!resp.body){print(`Error ${resp.status}`);return;}
+    const reader=resp.body.getReader();const dec=new TextDecoder();let buf='';
+    while(true){
+      const {done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let idx;while((idx=buf.indexOf('\n'))>=0){
+        const line=buf.slice(0,idx).trim();buf=buf.slice(idx+1);
+        if(!line)continue;
+        try{
+          const j=JSON.parse(line);
+          if(j.type==='ack')print(`job_id: ${j.job_id}`,'prompt');
+          else if(j.type==='grounding.chunk')print(`grounding → ${JSON.stringify(j.data)}`);
+          else if(j.type==='answer.delta')print(j.data.text);
+          else if(j.type==='reasoning.delta')print(j.data.text);
+          else if(j.type==='complete')print(`✔ done (${j.status})`,'prompt');
+          else if(j.type==='error')print(`⚠ ${j.message}`,'prompt');
+        }catch(e){print(line);}
+      }
+    }
+  } else {
+    print(`Precogs Oracle [${precog}]`);
+    print('─'.repeat(50));
+    print('Paste HTML/JSON-LD content and press Ctrl+Enter or click Submit', 'prompt');
+    toggleInput();
   }
 })();
 </script>

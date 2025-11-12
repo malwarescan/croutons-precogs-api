@@ -2,11 +2,17 @@
   "name": "precogs-api",
   "version": "0.1.0",
   "type": "module",
+  "description": "Express API service for Precogs domain oracles.",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "migrate": "node scripts/migrate.js",
     "verify": "bash scripts/verify-railway.sh",
-    "test:chat": "node scripts/test-chat-endpoint.js"
+    "test:chat": "node scripts/test-chat-endpoint.js",
+
+    "schema:validate": "node tools/summon-schema.mjs validate",
+    "schema:genval": "node tools/summon-schema.mjs generate_and_validate",
+    "schema:url": "node tools/summon-schema.mjs url"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -20,5 +26,24 @@
   },
   "engines": {
     "node": ">=20.0.0"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/malwarescan/precogs-api.git"
+  },
+  "keywords": [
+    "precogs",
+    "croutons",
+    "schema",
+    "openai",
+    "ndjson",
+    "oracle"
+  ],
+  "author": "Joel Maldonado",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/malwarescan/precogs-api/issues"
+  },
+  "homepage": "https://github.com/malwarescan/precogs-api#readme"
 }

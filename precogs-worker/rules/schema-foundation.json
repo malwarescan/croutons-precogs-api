@@ -1,0 +1,41 @@
+{
+  "name": "schema-foundation",
+  "description": "Basic schema.org validation rules for JSON-LD",
+  "version": "1.0.0",
+  "rules": {
+    "required_fields_by_type": {
+      "@context": "https://schema.org",
+      "Service": ["@type", "name"],
+      "Product": ["@type", "name"],
+      "Organization": ["@type", "name"],
+      "LocalBusiness": ["@type", "name", "address"],
+      "Person": ["@type", "name"],
+      "Article": ["@type", "headline"],
+      "WebPage": ["@type", "name"]
+    },
+    "recommended_properties": {
+      "Service": ["description", "provider", "areaServed", "serviceType"],
+      "Product": ["description", "brand", "offers"],
+      "Organization": ["description", "url", "logo", "contactPoint"],
+      "LocalBusiness": ["description", "telephone", "priceRange", "openingHours"],
+      "Person": ["description", "jobTitle", "worksFor"],
+      "Article": ["description", "author", "datePublished"],
+      "WebPage": ["description", "url", "breadcrumb"]
+    },
+    "url_normalization": {
+      "enforce_https": true,
+      "normalize_trailing_slash": false
+    },
+    "id_normalization": {
+      "require_canonical_url": false,
+      "prefer_absolute_urls": true
+    },
+    "validation_checks": [
+      "check_required_fields",
+      "check_url_format",
+      "check_type_exists",
+      "suggest_recommended_properties"
+    ]
+  }
+}
+

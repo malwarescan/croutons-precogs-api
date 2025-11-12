@@ -5,45 +5,29 @@
   .wrap{padding:16px;max-width:900px;margin:auto}
   pre{white-space:pre-wrap;line-height:1.45;border:1px solid #1c212b;border-radius:12px;padding:12px}
   .chip{display:inline-block;padding:2px 8px;border:1px solid #2a2f3a;border-radius:999px;margin:2px}
+  #content{width:100%;min-height:100px;background:#1c212b;border:1px solid #2a2f3a;border-radius:8px;padding:8px;color:#e6e9ef;font:14px ui-monospace;margin:8px 0;box-sizing:border-box}
+  button{background:#2a2f3a;border:1px solid #3a3f4a;color:#e6e9ef;padding:6px 12px;border-radius:6px;cursor:pointer;margin:4px}
+  button:hover{background:#3a3f4a}
 </style>
 <div class="wrap">
   <h3>Precogs • NDJSON Stream</h3>
   <div id="meta"></div>
+  <div>
+    <label>Paste HTML/JSON-LD content:</label>
+    <textarea id="content" placeholder="Paste your schema snippet here..."></textarea>
+    <button onclick="runInline()">Validate Schema</button>
+    <button onclick="runURL()">Use URL Mode</button>
+  </div>
   <pre id="out"></pre>
 </div>
 <script>
-(async function(){
-  const p = new URLSearchParams(location.search);
-  const precog = p.get('precog') || 'schema';
-  const task   = p.get('task')   || `Run ${precog}`;
-  const url    = p.get('url')    || '';
-  const type   = p.get('type')   || '';
-  const token  = p.get('token')  || '';
+const token = new URLSearchParams(location.search).get('token') || '';
 
-  document.getElementById('meta').innerHTML =
-    `<span class="chip">precog: <b>${precog}</b></span>`+
-    (url? `<span class="chip">url: <b>${url}</b></span>`:'')+
-    (type?`<span class="chip">type: <b>${type}</b></span>`:'')+
-    `<span class="chip">task: <b>${task}</b></span>`;
-
-  const out = document.getElementById('out');
+async function streamNDJSON(resp, out) {
   const append = (t)=>{ out.textContent += t; out.scrollTop = out.scrollHeight; };
-
-  // Start the NDJSON run (this endpoint both enqueues and streams)
-  const qs = new URLSearchParams();
-  qs.set('precog', precog);
-  if (url) qs.set('url', url);
-  if (type) qs.set('type', type);
-  qs.set('task', task);
-  if (token) qs.set('token', token);
-
-  const resp = await fetch(`/v1/run.ndjson?${qs.toString()}`, {
-    headers: token ? { authorization: `Bearer ${token}` } : {}
-  });
-
+  
   if (!resp.ok || !resp.body) { append(`Error: ${resp.status}`); return; }
 
-  // Stream parse NDJSON in browser
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
@@ -66,6 +50,92 @@
         // Skip heartbeat
       } catch(e){ append(`\n[parse] ${line}`); }
     }
+  }
+}
+
+async function runInline() {
+  const content = document.getElementById('content').value.trim();
+  const precog = 'schema';
+  const type = 'Service';
+  const task = 'validate';
+  
+  if (!content) {
+    document.getElementById('out').textContent = 'Error: Please paste content first';
+    return;
+  }
+
+  const meta = document.getElementById('meta');
+  const out = document.getElementById('out');
+  
+  meta.innerHTML =
+    `<span class="chip">precog: <b>${precog}</b></span>`+
+    `<span class="chip">mode: <b>inline</b></span>`+
+    `<span class="chip">type: <b>${type}</b></span>`+
+    `<span class="chip">task: <b>${task}</b></span>`;
+  out.textContent = '';
+
+  try {
+    const body = {
+      precog: precog,
+      kb: 'schema-foundation',
+      content_source: 'inline',
+      content: content,
+      type: type,
+      task: task,
+    };
+
+    const resp = await fetch('/v1/run.ndjson', {
+      method: 'POST',
+      headers: Object.assign({'content-type':'application/json'}, token ? {'authorization':`Bearer ${token}`} : {}),
+      body: JSON.stringify(body)
+    });
+
+    await streamNDJSON(resp, out);
+  } catch (e) {
+    out.textContent = `Error: ${e.message || e}`;
+  }
+}
+
+async function runURL() {
+  const url = prompt('Enter URL to analyze:');
+  if (!url) return;
+
+  const p = new URLSearchParams(location.search);
+  const precog = p.get('precog') || 'schema';
+  const task = p.get('task') || `Run ${precog}`;
+  const type = p.get('type') || '';
+  const token = p.get('token') || '';
+
+  const meta = document.getElementById('meta');
+  const out = document.getElementById('out');
+  
+  meta.innerHTML =
+    `<span class="chip">precog: <b>${precog}</b></span>`+
+    (url? `<span class="chip">url: <b>${url}</b></span>`:'')+
+    (type?`<span class="chip">type: <b>${type}</b></span>`:'')+
+    `<span class="chip">task: <b>${task}</b></span>`;
+  out.textContent = '';
+
+  const qs = new URLSearchParams();
+  qs.set('precog', precog);
+  if (url) qs.set('url', url);
+  if (type) qs.set('type', type);
+  qs.set('task', task);
+  if (token) qs.set('token', token);
+
+  const resp = await fetch(`/v1/run.ndjson?${qs.toString()}`, {
+    headers: token ? { authorization: `Bearer ${token}` } : {}
+  });
+
+  await streamNDJSON(resp, out);
+}
+
+// Auto-run if URL params present (legacy mode)
+(async function(){
+  const p = new URLSearchParams(location.search);
+  const url = p.get('url');
+  if (url) {
+    runURL();
   }
 })();
 </script>

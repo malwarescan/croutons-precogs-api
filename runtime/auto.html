@@ -6,49 +6,121 @@
   .wrap{padding:16px;max-width:900px;margin:auto}
   .chip{display:inline-block;padding:2px 8px;border:1px solid #2a2f3a;border-radius:999px;margin:2px}
   #out{white-space:pre-wrap;line-height:1.45;border:1px solid #1c212b;border-radius:12px;padding:12px;margin-top:12px;min-height:140px}
+  #content{width:100%;min-height:100px;background:#1c212b;border:1px solid #2a2f3a;border-radius:8px;padding:8px;color:#e6e9ef;font:14px ui-monospace;margin:8px 0}
+  button{background:#2a2f3a;border:1px solid #3a3f4a;color:#e6e9ef;padding:6px 12px;border-radius:6px;cursor:pointer;margin:4px}
+  button:hover{background:#3a3f4a}
   a{color:#8ab4f8}
 </style>
 <div class="wrap">
   <h3>Precogs • Auto</h3>
   <div id="meta"></div>
+  <div>
+    <label>Paste HTML/JSON-LD content:</label>
+    <textarea id="content" placeholder="Paste your schema snippet here..."></textarea>
+    <button onclick="runInline()">Validate Schema</button>
+    <button onclick="runURL()">Use URL Mode</button>
+  </div>
   <div id="out"></div>
 </div>
 <script>
-(async function(){
-  // Parse URL params OR a full directive in the hash
-  const p = new URLSearchParams(location.search);
-  const hash = decodeURIComponent(location.hash?.slice(1) || "");
-  const token = p.get('token') || "";          // optional
-  let precog = p.get('precog');                // e.g. schema
-  let task   = p.get('task');                  // free text
-  let url    = p.get('url');
-  let type   = p.get('type');
+const token = new URLSearchParams(location.search).get('token') || "";
 
-  // Support a directive in the hash like: /crtns:precog:@schema: --url ... --type ... --task "..."
-  if (!precog && hash.startsWith('/crtns:precog:')) {
-    const m = hash.match(/^\/crtns:precog:@([^:]+):(?:\s+--url\s+(\S+))?(?:\s+--type\s+(\S+))?(?:\s+--task\s+(.+))?/i);
-    if (m) {
-      precog = m[1]; url = url || m[2]; type = type || m[3]; task = task || (m[4]?.trim() ?? "");
-    }
+async function runInline() {
+  const content = document.getElementById('content').value.trim();
+  const precog = 'schema';
+  const type = 'Service';
+  const task = 'validate';
+  
+  if (!content) {
+    document.getElementById('out').textContent = 'Error: Please paste content first';
+    return;
   }
 
   const meta = document.getElementById('meta');
-  const out  = document.getElementById('out');
+  const out = document.getElementById('out');
   function chip(k,v){ return `<span class="chip">${k}: <b>${(v??'').toString().slice(0,200)}</b></span>`; }
-
-  if (!precog) { out.textContent = 'Missing ?precog= or #/crtns:precog:…'; return; }
-  meta.innerHTML = [chip('precog',precog), chip('url',url||''), chip('type',type||''), chip('task',task||'')].join(' ');
-
-  // Build request
-  const body = {
-    precog,
-    prompt: task || `Run ${precog}`,
-    context: Object.fromEntries(Object.entries({ url, type }).filter(([,v])=>v)),
-    stream: true
-  };
+  
+  meta.innerHTML = [chip('precog',precog), chip('mode','inline'), chip('type',type), chip('task',task)].join(' ');
+  out.textContent = '';
 
   try {
-    // POST /v1/invoke (can send Authorization header here)
+    // POST to /v1/run.ndjson with inline content
+    const body = {
+      precog: precog,
+      kb: 'schema-foundation',
+      content_source: 'inline',
+      content: content,
+      type: type,
+      task: task,
+    };
+
+    const r = await fetch('/v1/run.ndjson', {
+      method: 'POST',
+      headers: Object.assign({'content-type':'application/json'}, token ? {'authorization':`Bearer ${token}`} : {}),
+      body: JSON.stringify(body)
+    });
+
+    if (!r.ok) {
+      const error = await r.text();
+      throw new Error(error || 'Request failed');
+    }
+
+    // Stream NDJSON response
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const parts = buffer.split('\n');
+      buffer = parts.pop();
+
+      for (const line of parts) {
+        if (!line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          if (data.type === 'ack') out.textContent += `🔮 Job ID: ${data.job_id}\n`;
+          if (data.type === 'grounding.chunk') out.textContent += `📚 Grounding: ${JSON.stringify(data.data)}\n`;
+          if (data.type === 'answer.delta') out.textContent += (data.data?.text || '');
+          if (data.type === 'complete') out.textContent += '\n✅ Done\n';
+          if (data.type === 'error') out.textContent += `\n⚠️ Error: ${data.message || ''}\n`;
+          out.scrollTop = out.scrollHeight;
+        } catch (e) {
+          console.error('Parse error:', e);
+        }
+      }
+    }
+  } catch (e) {
+    out.textContent = `Error: ${e.message || e}`;
+  }
+}
+
+async function runURL() {
+  const url = prompt('Enter URL to analyze:');
+  if (!url) return;
+
+  const precog = new URLSearchParams(location.search).get('precog') || 'schema';
+  const task = new URLSearchParams(location.search).get('task') || 'validate';
+  const type = new URLSearchParams(location.search).get('type') || 'Service';
+
+  const meta = document.getElementById('meta');
+  const out = document.getElementById('out');
+  function chip(k,v){ return `<span class="chip">${k}: <b>${(v??'').toString().slice(0,200)}</b></span>`; }
+  
+  meta.innerHTML = [chip('precog',precog), chip('url',url), chip('type',type), chip('task',task)].join(' ');
+  out.textContent = '';
+
+  try {
+    // POST /v1/invoke (legacy URL mode)
+    const body = {
+      precog,
+      prompt: task || `Run ${precog}`,
+      context: { url, type },
+      stream: true
+    };
+
     const r = await fetch('/v1/invoke', {
       method:'POST',
       headers: Object.assign({'content-type':'application/json'}, token ? {'authorization':`Bearer ${token}`} : {}),
@@ -57,7 +129,7 @@
     const { ok, job_id, error } = await r.json();
     if (!ok) throw new Error(error || 'invoke failed');
 
-    // OPEN SSE (EventSource cannot set headers → pass ?token= if API requires it)
+    // OPEN SSE
     const es = new EventSource(`/v1/jobs/${job_id}/events${token ? `?token=${encodeURIComponent(token)}`:''}`);
     const append = t => { out.textContent += t; out.scrollTop = out.scrollHeight; };
     es.addEventListener('grounding.chunk', e => append(`[grounding] ${e.data}\n`));
@@ -67,6 +139,15 @@
     es.addEventListener('error',           e => { append(`\n[error] ${e.data||''}\n`); });
   } catch (e) {
     out.textContent = `Error: ${e.message || e}`;
+  }
+}
+
+// Auto-run if URL params present (legacy mode)
+(async function(){
+  const p = new URLSearchParams(location.search);
+  const url = p.get('url');
+  if (url) {
+    runURL();
   }
 })();
 </script>

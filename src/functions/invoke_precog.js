@@ -6,23 +6,34 @@
 
 export const invokePrecogFunction = {
   name: "invoke_precog",
-  description: "Invoke a Precogs oracle to analyze a URL using domain-specific knowledge. Returns a job_id and stream URL for real-time results.",
+  description: "Invoke a Precogs oracle to analyze schema or HTML content using domain-specific knowledge. Returns a job_id and stream URL for real-time results. Prefer inline content when user provides schema or HTML snippets.",
   parameters: {
     type: "object",
     properties: {
       kb: {
         type: "string",
-        description: "Knowledge base identifier (e.g., 'siding-services', 'cladding', 'general'). Defaults to 'general' if not specified.",
-        enum: ["general", "siding-services", "cladding"],
+        description: "Knowledge base identifier. Defaults to 'schema-foundation' for schema precog, 'general' otherwise.",
+        enum: ["general", "schema-foundation", "siding-services", "cladding"],
+        default: "schema-foundation",
       },
       precog: {
         type: "string",
         description: "Precog type to invoke",
         enum: ["schema", "faq", "pricing"],
       },
+      content_source: {
+        type: "string",
+        description: "Source of content: 'inline' for pasted HTML/JSON-LD snippets, 'url' for web page URLs. Defaults to 'inline'.",
+        enum: ["inline", "url"],
+        default: "inline",
+      },
+      content: {
+        type: "string",
+        description: "Inline content (HTML or JSON-LD snippet) when content_source is 'inline'. Preferred when user provides schema or HTML in chat.",
+      },
       url: {
         type: "string",
-        description: "Target URL to analyze",
+        description: "Target URL to analyze. Only use when content_source is 'url' or user explicitly provides a URL.",
       },
       type: {
         type: "string",
@@ -30,10 +41,10 @@ export const invokePrecogFunction = {
       },
       task: {
         type: "string",
-        description: "Task description or prompt. If not provided, defaults to 'Run {precog}'",
+        description: "Task description or prompt. Defaults to 'validate' for schema precog, 'Run {precog}' otherwise.",
       },
     },
-    required: ["precog", "url"],
+    required: ["precog"],
   },
 };
 
@@ -45,44 +56,77 @@ export async function executeInvokePrecog(args, baseUrl = "https://precogs.crout
   const { insertJob } = await import("../db.js");
   const { enqueueJob } = await import("../redis.js");
 
-  // Ensure kb defaults to "general" if not provided (supports Phase 1 before KB integration)
-  const { kb = "general", precog, url, type, task } = args;
+  // Extract parameters with defaults
+  const {
+    kb = args.precog === "schema" ? "schema-foundation" : "general",
+    precog,
+    content_source = "inline",
+    content,
+    url,
+    type,
+    task,
+  } = args;
   
-  // Validate kb is a known value (for future KB integration)
-  const validKBs = ["general", "siding-services", "cladding"];
-  const kbValue = validKBs.includes(kb) ? kb : "general";
+  // Validate kb is a known value
+  const validKBs = ["general", "schema-foundation", "siding-services", "cladding"];
+  const kbValue = validKBs.includes(kb) ? kb : (precog === "schema" ? "schema-foundation" : "general");
 
   // Validate required parameters
-  if (!precog || !url) {
-    throw new Error("precog and url are required");
+  if (!precog) {
+    throw new Error("precog is required");
   }
 
-  const context = {};
+  // Validate content source requirements
+  if (content_source === "inline" && !content) {
+    throw new Error("content is required when content_source is 'inline'");
+  }
+  if (content_source === "url" && !url) {
+    throw new Error("url is required when content_source is 'url'");
+  }
+
+  const context = {
+    kb: kbValue,
+    content_source,
+  };
   if (type) context.type = type;
-  // Store kb in context for worker to use (even if KB integration pending)
-  context.kb = kbValue;
+  if (content_source === "inline" && content) {
+    context.content = content;
+  }
+  if (content_source === "url" && url) {
+    context.url = url;
+  }
+
+  // Default task based on precog type
+  const jobTask = task || (precog === "schema" ? "validate" : `Run ${precog}`);
 
   // Create job
-  const job = await insertJob(precog, task || `Run ${precog}`, { ...context, url });
+  const job = await insertJob(precog, jobTask, context);
 
   // Enqueue job to Redis Stream
   if (process.env.REDIS_URL) {
     try {
-      await enqueueJob(job.id, precog, task || `Run ${precog}`, { ...context, url, kb: kbValue });
+      await enqueueJob(job.id, precog, jobTask, context);
     } catch (redisErr) {
       console.error("[invoke_precog] Redis enqueue failed:", redisErr.message);
       // Continue anyway - job is in DB
     }
   }
 
+  // Build URLs (prefer POST for inline, GET for URL)
+  const params = new URLSearchParams({ precog, kb: kbValue });
+  if (type) params.set("type", type);
+  if (jobTask !== `Run ${precog}`) params.set("task", jobTask);
+
   // Return structured result for LLM
   return {
     job_id: job.id,
     status: "pending",
     stream_url: `${baseUrl}/v1/jobs/${job.id}/events`,
-    ndjson_url: `${baseUrl}/v1/run.ndjson?precog=${precog}&url=${encodeURIComponent(url)}${type ? `&type=${encodeURIComponent(type)}` : ""}${task ? `&task=${encodeURIComponent(task)}` : ""}`,
-    cli_url: `${baseUrl}/cli?precog=${precog}&url=${encodeURIComponent(url)}${type ? `&type=${encodeURIComponent(type)}` : ""}${task ? `&task=${encodeURIComponent(task)}` : ""}`,
-    message: `Precog job created. Job ID: ${job.id}. Stream results at: ${baseUrl}/cli?precog=${precog}&url=${encodeURIComponent(url)}`,
+    ndjson_url: content_source === "inline" 
+      ? `${baseUrl}/v1/run.ndjson` // POST endpoint
+      : `${baseUrl}/v1/run.ndjson?${params.toString()}&url=${encodeURIComponent(url)}`,
+    cli_url: `${baseUrl}/cli?${params.toString()}${url ? `&url=${encodeURIComponent(url)}` : ""}`,
+    message: `Precog job created. Job ID: ${job.id}. Stream results at: ${baseUrl}/cli?${params.toString()}`,
   };
 }
 

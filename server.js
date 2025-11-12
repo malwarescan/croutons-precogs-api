@@ -309,7 +309,9 @@ app.get("/metrics", async (_req, res) => {
   }
 });
 
-// GET /v1/run.ndjson - Create job and stream events as NDJSON
+// GET/POST /v1/run.ndjson - Create job and stream events as NDJSON
+// GET: legacy URL-based mode (?precog=...&url=...)
+// POST: inline content mode ({precog, kb, content_source, content, type, task})
 app.get("/v1/run.ndjson", async (req, res) => {
   try {
     // Optional auth (header OR ?token= for browser)
@@ -324,8 +326,11 @@ app.get("/v1/run.ndjson", async (req, res) => {
     }
 
     const precog = req.query.precog || "schema";
-    const task = req.query.task || `Run ${precog}`;
-    const ctx = {};
+    const task = req.query.task || (precog === "schema" ? "validate" : `Run ${precog}`);
+    const ctx = {
+      kb: req.query.kb || (precog === "schema" ? "schema-foundation" : "general"),
+      content_source: "url",
+    };
     if (req.query.url) ctx.url = req.query.url;
     if (req.query.type) ctx.type = req.query.type;
 
@@ -415,6 +420,140 @@ app.get("/v1/run.ndjson", async (req, res) => {
   } catch (e) {
     console.error("[run.ndjson] Error:", e);
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /v1/run.ndjson - Create job with inline content and stream events as NDJSON
+app.post("/v1/run.ndjson", async (req, res) => {
+  try {
+    // Optional auth
+    if (process.env.API_KEY) {
+      const hdr = req.headers.authorization || "";
+      const expected = `Bearer ${process.env.API_KEY}`;
+      
+      if (hdr !== expected) {
+        return res.status(401).json({ ok: false, error: "unauthorized" });
+      }
+    }
+
+    const {
+      precog = "schema",
+      kb = precog === "schema" ? "schema-foundation" : "general",
+      content_source = "inline",
+      content,
+      url,
+      type,
+      task,
+    } = req.body;
+
+    // Validate content source requirements
+    if (content_source === "inline" && !content) {
+      return res.status(400).json({ ok: false, error: "content is required when content_source is 'inline'" });
+    }
+    if (content_source === "url" && !url) {
+      return res.status(400).json({ ok: false, error: "url is required when content_source is 'url'" });
+    }
+
+    const ctx = {
+      kb: kb || (precog === "schema" ? "schema-foundation" : "general"),
+      content_source,
+    };
+    if (type) ctx.type = type;
+    if (content_source === "inline" && content) {
+      ctx.content = content;
+    }
+    if (content_source === "url" && url) {
+      ctx.url = url;
+    }
+
+    const jobTask = task || (precog === "schema" ? "validate" : `Run ${precog}`);
+
+    // Create job
+    const job = await insertJob(precog, jobTask, ctx);
+    
+    // Enqueue job to Redis Stream
+    if (process.env.REDIS_URL) {
+      try {
+        await enqueueJob(job.id, precog, jobTask, ctx);
+      } catch (redisErr) {
+        console.error("[run.ndjson] Redis enqueue failed:", redisErr.message);
+        // Continue anyway - job is in DB
+      }
+    }
+
+    // NDJSON stream headers
+    res.set({
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Transfer-Encoding": "chunked",
+      "X-Accel-Buffering": "no",
+    });
+
+    // Helper to write one NDJSON line
+    const line = (obj) => {
+      try {
+        res.write(JSON.stringify(obj) + "\n");
+      } catch (e) {
+        return false;
+      }
+      return true;
+    };
+
+    // Send initial ack
+    if (!line({ type: "ack", job_id: job.id })) return;
+
+    // Poll DB events and write each as NDJSON
+    let lastId = 0;
+    let open = true;
+    req.on("close", () => {
+      open = false;
+    });
+
+    // Heartbeat keeps proxies from closing idle streams
+    const hb = setInterval(() => {
+      if (open) line({ type: "heartbeat" });
+    }, 15000);
+
+    try {
+      while (open) {
+        const rows = await getJobEvents(job.id, 1000);
+        
+        for (const r of rows) {
+          if (!open) break;
+          
+          const eventId = Number(r.id);
+          if (eventId > lastId) {
+            lastId = eventId;
+            
+            const data = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+            
+            if (!line({ type: r.type, data: data, ts: r.ts })) {
+              open = false;
+              break;
+            }
+          }
+        }
+
+        const j = await getJob(job.id);
+        if (j && (j.status === "done" || j.status === "error" || j.status === "cancelled")) {
+          line({ type: "complete", status: j.status, error: j.error || null });
+          break;
+        }
+
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    } catch (e) {
+      line({ type: "error", message: String(e?.message || e) });
+    } finally {
+      clearInterval(hb);
+      res.end();
+    }
+  } catch (e) {
+    console.error("[run.ndjson POST] Error:", e);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   }
 });
 
