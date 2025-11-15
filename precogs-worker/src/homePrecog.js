@@ -5,6 +5,7 @@
  */
 
 import { loadKB } from "./kb.js";
+import { fetchNDJSON } from "./ndjsonIngestion.js";
 
 /**
  * Process home domain precog job
@@ -117,6 +118,22 @@ async function queryCroutonsGraph(params, emit) {
 
     if (!response.ok) {
       console.warn(`[home-precog] Graph query failed: ${response.status}`);
+      
+      // Fallback: fetch directly from NDJSON feed if domain is known
+      if (domain) {
+        const ndjsonUrl = getNDJSONUrlForDomain(domain);
+        if (ndjsonUrl) {
+          console.log(`[home-precog] Falling back to NDJSON feed: ${ndjsonUrl}`);
+          try {
+            const factlets = await fetchNDJSON(ndjsonUrl);
+            console.log(`[home-precog] Fetched ${factlets.length} factlets from NDJSON feed`);
+            return factlets;
+          } catch (ndjsonError) {
+            console.warn(`[home-precog] NDJSON fallback failed: ${ndjsonError.message}`);
+          }
+        }
+      }
+      
       return [];
     }
 
@@ -127,9 +144,38 @@ async function queryCroutonsGraph(params, emit) {
     return data.triples || data.factlets || [];
   } catch (error) {
     console.warn(`[home-precog] Graph query error: ${error.message}`);
+    
+    // Fallback: fetch directly from NDJSON feed if domain is known
+    if (domain) {
+      const ndjsonUrl = getNDJSONUrlForDomain(domain);
+      if (ndjsonUrl) {
+        console.log(`[home-precog] Falling back to NDJSON feed after error: ${ndjsonUrl}`);
+        try {
+          const factlets = await fetchNDJSON(ndjsonUrl);
+          console.log(`[home-precog] Fetched ${factlets.length} factlets from NDJSON feed`);
+          return factlets;
+        } catch (ndjsonError) {
+          console.warn(`[home-precog] NDJSON fallback failed: ${ndjsonError.message}`);
+        }
+      }
+    }
+    
     // Return empty array on error - precog can still work with KB rules
     return [];
   }
+}
+
+/**
+ * Get NDJSON feed URL for a given domain
+ * @param {string} domain - Domain name
+ * @returns {string|null} NDJSON URL or null if not known
+ */
+function getNDJSONUrlForDomain(domain) {
+  const domainMap = {
+    "floodbarrierpros.com": "https://floodbarrierpros.com/sitemaps/sitemap-ai.ndjson",
+    // Add more domains as needed
+  };
+  return domainMap[domain] || null;
 }
 
 /**
@@ -202,7 +248,46 @@ function diagnoseTask(factlets, context) {
     recommendedSteps.push("Check system", "Monitor closely", "Call professional if needed");
   }
 
-  return {
+  // Extract cost_band and when from factlets if domain is floodbarrierpros.com
+  let costBand = null;
+  let when = null;
+
+  if (domain === "floodbarrierpros.com" && factlets && factlets.length > 0) {
+    // Normalize region for matching (extract city name)
+    const regionNormalized = region ? region.toLowerCase().split(",")[0].trim() : "";
+    
+    // Find factlet matching region or use first one
+    const matchingFactlet = factlets.find(f => {
+      if (!regionNormalized) return false;
+      
+      // Check various location fields
+      const fLocation = (f.location || f.region || "").toLowerCase();
+      const fId = (f["@id"] || "").toLowerCase();
+      const fName = (f.name || "").toLowerCase();
+      
+      return fLocation.includes(regionNormalized) ||
+             fId.includes(regionNormalized) ||
+             fName.includes(regionNormalized);
+    }) || factlets[0];
+
+    // Extract cost_range -> cost_band
+    if (matchingFactlet.cost_range) {
+      costBand = matchingFactlet.cost_range;
+    } else if (matchingFactlet.cost_p50) {
+      // Fallback: use median cost as estimate
+      costBand = `~${matchingFactlet.cost_p50}`;
+    }
+
+    // Extract best_season -> when
+    if (matchingFactlet.best_season) {
+      when = matchingFactlet.best_season;
+    } else if (matchingFactlet.typical_duration) {
+      // Fallback: use typical_duration if best_season not available
+      when = matchingFactlet.typical_duration;
+    }
+  }
+
+  const result = {
     assessment: assessment,
     risk_score: riskScore,
     likely_causes: likelyCauses,
@@ -210,6 +295,16 @@ function diagnoseTask(factlets, context) {
     dangerous_conditions: content.toLowerCase().includes("electrical") ? ["Water near electrical outlets"] : [],
     triage_level: riskScore > 0.6 ? "caution" : "safe",
   };
+
+  // Add cost_band and when if extracted from factlets
+  if (costBand) {
+    result.cost_band = costBand;
+  }
+  if (when) {
+    result.when = when;
+  }
+
+  return result;
 }
 
 /**
@@ -409,8 +504,21 @@ async function emitAnswer(result, emit) {
   }
 
   if (result.cost_band) {
+    // Handle both object format (old) and string format (new from factlets)
+    if (typeof result.cost_band === "string") {
+      await emit("answer.delta", {
+        text: `\nCost Band: ${result.cost_band}\n`,
+      });
+    } else {
+      await emit("answer.delta", {
+        text: `\nCost Band: ${result.cost_band.currency || "USD"} ${result.cost_band.low} - ${result.cost_band.high} (Confidence: ${result.cost_band.confidence || 0})\n`,
+      });
+    }
+  }
+
+  if (result.when) {
     await emit("answer.delta", {
-      text: `\nCost Band: ${result.cost_band.currency || "USD"} ${result.cost_band.low} - ${result.cost_band.high} (Confidence: ${result.cost_band.confidence || 0})\n`,
+      text: `\nWhen: ${result.when}\n`,
     });
   }
 

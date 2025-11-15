@@ -64,6 +64,31 @@
       "type": "string",
       "default": "USD"
     },
+    "cost_range": {
+      "type": "string",
+      "description": "Cost range in format '$X,XXX-$X,XXX' (e.g., '$1,200-$5,600')"
+    },
+    "cost_p50": {
+      "type": "string",
+      "description": "Median cost in format '$X,XXX' (e.g., '$3,400')"
+    },
+    "cost_p90": {
+      "type": "string",
+      "description": "90th percentile cost in format '$X,XXX' (e.g., '$5,160')"
+    },
+    "cost_currency": {
+      "type": "string",
+      "default": "USD",
+      "description": "Currency for cost fields (default: USD)"
+    },
+    "best_season": {
+      "type": "string",
+      "description": "Best season/timing for work (e.g., 'April-May (before hurricane season)')"
+    },
+    "typical_duration": {
+      "type": "string",
+      "description": "Typical duration for work (e.g., '1-2 days installation')"
+    },
     "domain": {
       "type": "string",
       "description": "Source domain (e.g., 'floodbarrierpros.com')"
@@ -122,4 +147,7 @@
   },
   "additionalProperties": false
 }
+
+
+
 
