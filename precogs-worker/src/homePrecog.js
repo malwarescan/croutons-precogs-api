@@ -26,6 +26,12 @@ export async function processHomePrecog(jobId, namespace, task, context, emit) {
   console.log(`[home-precog] Processing ${namespace}.${task} for job ${jobId}`);
 
   try {
+    // Emit thinking/analyzing event for loading state
+    await emit("thinking", {
+      message: "Analyzing your request...",
+      status: "analyzing",
+    });
+
     // Emit grounding event
     await emit("grounding.chunk", {
       count: 1,
