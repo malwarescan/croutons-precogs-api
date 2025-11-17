@@ -5,9 +5,54 @@
  */
 
 import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { readFileSync, existsSync } from "fs";
 
 const GOOGLE_MAPS_URL = "https://www.google.com/maps/search/erotic+massage+bangkok/@13.7455615,100.4277491,11.02z/data=!4m2!2m1!6e1?entry=ttu&g_ep=EgoyMDI1MTExMi4wIKXMDSoASAFQAw%3D%3D";
+
+// Load corpus data directly (no external service needed)
+function loadCorpusShops(district = null) {
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    
+    // Try multiple paths to find corpus
+    const corpusPaths = [
+      join(__dirname, '../../../../corpora/thailand/bangkok/massage/shops_legit.ndjson'),
+      join(__dirname, '../../../corpora/thailand/bangkok/massage/shops_legit.ndjson'),
+      join(process.cwd(), 'corpora/thailand/bangkok/massage/shops_legit.ndjson'),
+    ];
+    
+    let corpusPath = null;
+    for (const path of corpusPaths) {
+      if (existsSync(path)) {
+        corpusPath = path;
+        break;
+      }
+    }
+    
+    if (!corpusPath) {
+      console.warn('[bkk-massage] Corpus file not found, trying merge service');
+      return [];
+    }
+    
+    const content = readFileSync(corpusPath, 'utf-8');
+    const shops = content
+      .split('\n')
+      .filter(line => line.trim())
+      .map(line => JSON.parse(line))
+      .filter(shop => {
+        if (!district) return true;
+        return shop.district && shop.district.toLowerCase() === district.toLowerCase();
+      });
+    
+    console.log(`[bkk-massage] Loaded ${shops.length} shops from corpus${district ? ` in ${district}` : ''}`);
+    return shops;
+  } catch (error) {
+    console.warn(`[bkk-massage] Failed to load corpus: ${error.message}`);
+    return [];
+  }
+}
 
 /**
  * Process Bangkok Massage precog job
@@ -43,9 +88,18 @@ export async function processBkkMassagePrecog(jobId, namespace, task, context, e
       });
     }
 
-    // Call Croutons Merge Service to merge with corpus data
-    // If liveShops is empty, merge service will return corpus data
-    const mergedShops = await mergeWithCorpus(liveShops, region, emit);
+    // Load corpus data directly (no external service needed)
+    let corpusShops = [];
+    try {
+      corpusShops = loadCorpusShops(region);
+    } catch (error) {
+      console.warn(`[bkk-massage] Corpus load failed: ${error.message}`);
+    }
+    
+    // Merge live shops with corpus (or use corpus only if liveShops is empty)
+    const mergedShops = liveShops.length > 0 
+      ? [...liveShops, ...corpusShops] // Combine if we have live data
+      : corpusShops; // Use corpus only if no live data
 
     // Emit grounding event
     await emit("grounding.chunk", {
@@ -80,46 +134,7 @@ export async function processBkkMassagePrecog(jobId, namespace, task, context, e
   }
 }
 
-/**
- * Merge live Google Maps data with corpus via Croutons Merge Service
- * @param {Array} liveShops - Shops from Google Maps
- * @param {string} region - District name
- * @param {Function} emit - Event emitter
- * @returns {Promise<Array>} Merged shop data
- */
-async function mergeWithCorpus(liveShops, region, emit) {
-  const mergeApiUrl = process.env.BKK_MERGE_API_URL || "https://croutons-merge-service.up.railway.app/v1/merge/bkk_massage";
-  
-  try {
-    await emit("thinking", {
-      message: "Merging with verified corpus data...",
-      status: "merging",
-    });
-
-    const response = await fetch(mergeApiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        liveShops,
-        district: region,
-        mergeStrategy: "enrich_with_corpus",
-      }),
-    });
-
-    if (!response.ok) {
-      console.warn(`[bkk-massage] Merge service failed: ${response.status}, using live data only`);
-      return liveShops; // Fallback to live data
-    }
-
-    const result = await response.json();
-    return result.shops || liveShops;
-  } catch (error) {
-    console.warn(`[bkk-massage] Merge service error: ${error.message}, using live data only`);
-    return liveShops; // Fallback to live data
-  }
-}
+// Removed mergeWithCorpus function - now loading corpus directly in processBkkMassagePrecog
 
 /**
  * Fetch data from Google Maps
