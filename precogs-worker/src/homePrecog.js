@@ -179,6 +179,7 @@ async function queryCroutonsGraph(params, emit) {
 function getNDJSONUrlForDomain(domain) {
   const domainMap = {
     "floodbarrierpros.com": "https://floodbarrierpros.com/sitemaps/sitemap-ai.ndjson",
+    "ourcasa.ai": "https://ourcasa.ai/sitemaps/sitemap-ai.ndjson",
     // Add more domains as needed
   };
   return domainMap[domain] || null;
@@ -253,6 +254,7 @@ function diagnoseTask(factlets, context) {
   const symptoms = extractSymptoms(content);
   const region = context?.region || "";
   const domain = context?.domain || "";
+  const vertical = context?.vertical || "";
 
   // Build assessment based on content and factlets
   let assessment = "Analysis based on symptoms and knowledge base";
