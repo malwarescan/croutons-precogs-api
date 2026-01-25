@@ -240,6 +240,13 @@ function extractSections(html, url, docId, boilerplateSignals) {
       const windowText = remainingText.substring(0, maxSectionLength);
       const sectionId = generateId(url, sectionPath, windowIndex);
       
+      // REQUIREMENT 1: Calculate section rank features
+      const sectionRankFeatures = {
+        heading_level: heading.level,
+        section_path_depth: pathStack.length,
+        schema_density: 0 // Will be calculated later if needed
+      };
+      
       sections.push({
         section_id: sectionId,
         doc_id: docId,
@@ -250,8 +257,10 @@ function extractSections(html, url, docId, boilerplateSignals) {
         char_start: 0, // Will be set when building doc_clean_text
         char_end: 0,
         clean_text: windowText,
+        section_text: windowText, // REQUIREMENT 1: Explicit section_text alias
         prev_section_id: i > 0 ? sections[sections.length - 1]?.section_id : null,
-        next_section_id: null // Will be set in next iteration
+        next_section_id: null, // Will be set in next iteration
+        section_rank_features: sectionRankFeatures // REQUIREMENT 1
       });
       
       // Set prev section's next pointer
@@ -267,7 +276,7 @@ function extractSections(html, url, docId, boilerplateSignals) {
   return sections;
 }
 
-// REQUIREMENT 1: Build doc_clean_text and fix provenance offsets
+// REQUIREMENT 1: Build doc_clean_text and fix provenance offsets (REQUIREMENT 2: Fix offsets)
 function buildDocCleanText(sections) {
   if (!sections || sections.length === 0) {
     return '';
@@ -280,31 +289,66 @@ function buildDocCleanText(sections) {
     if (!section || !section.clean_text) continue;
     
     const sectionStart = cursor;
-    docParts.push(section.clean_text);
-    const sectionEnd = cursor + section.clean_text.length;
+    const sectionText = section.clean_text;
+    docParts.push(sectionText);
+    const sectionEnd = cursor + sectionText.length;
     
-    // Set absolute offsets
+    // Set absolute offsets (REQUIREMENT 2: real positions, not 0)
     section.char_start = sectionStart;
     section.char_end = sectionEnd;
     
-    cursor = sectionEnd + 5; // Add separator length "\n\n—\n\n"
-    if (cursor < docParts.join('\n\n—\n\n').length) {
-      cursor = docParts.join('\n\n—\n\n').length;
-    }
+    // Update cursor for next section (accounting for separator)
+    const separator = '\n\n—\n\n';
+    cursor = sectionEnd + separator.length;
   }
   
   return docParts.join('\n\n—\n\n');
 }
 
-// REQUIREMENT 3: Atomize units (one claim per unit, 120-350 chars target, 800 hard cap)
+// REQUIREMENT 2: Calculate unit offsets within section (for SINR protocol)
+function calculateUnitOffsets(unit, section) {
+  if (!section || !section.clean_text) {
+    return { unit_offset_start: 0, unit_offset_end: 0 };
+  }
+  
+  // Find unit text position within section
+  const unitText = unit.clean_text;
+  const sectionText = section.clean_text;
+  const offsetStart = sectionText.indexOf(unitText);
+  
+  if (offsetStart === -1) {
+    // Fallback: estimate based on char_start if available
+    if (unit.char_start !== undefined && section.char_start !== undefined) {
+      return {
+        unit_offset_start: unit.char_start - section.char_start,
+        unit_offset_end: (unit.char_end || unit.char_start) - section.char_start
+      };
+    }
+    return { unit_offset_start: 0, unit_offset_end: unitText.length };
+  }
+  
+  return {
+    unit_offset_start: offsetStart,
+    unit_offset_end: offsetStart + unitText.length
+  };
+}
+
+// REQUIREMENT 4: Atomize units (one claim per unit, 120-350 chars target, 800 hard cap)
+// Split multi-claim blobs into single-assertion units
 function atomizeUnit(text, unitType, maxLength = 800) {
-  if (text.length <= maxLength) {
-    return [text];
+  if (!text || text.length === 0) return [];
+  if (text.length <= maxLength && text.length <= 350) {
+    // Check if it's already a single assertion
+    const sentences = text.split(/(?<=[.!?])\s+/);
+    if (sentences.length === 1) {
+      return [text];
+    }
   }
   
   const units = [];
+  const targetLength = 200; // Target 120-350 chars
   
-  // Split by colon-chains first (e.g., "Research-based approach: ... Entity engineering: ...")
+  // REQUIREMENT 4: Split by colon-chains (multi-claim pattern)
   const colonSplit = text.split(/:\s*(?=[A-Z])/);
   if (colonSplit.length > 1) {
     for (let i = 0; i < colonSplit.length; i++) {
@@ -312,8 +356,9 @@ function atomizeUnit(text, unitType, maxLength = 800) {
       if (i < colonSplit.length - 1) {
         part += ':';
       }
+      
+      // Split further if still too long
       if (part.length > maxLength) {
-        // Further split by sentences
         const sentences = part.split(/(?<=[.!?])\s+/);
         let current = '';
         for (const sentence of sentences) {
@@ -326,15 +371,36 @@ function atomizeUnit(text, unitType, maxLength = 800) {
         }
         if (current) units.push(current.trim());
       } else if (part.length > 50) {
-        units.push(part);
+        // If part is still multi-sentence, split further for atomicity
+        const sentences = part.split(/(?<=[.!?])\s+/);
+        if (sentences.length > 1) {
+          // Keep sentences together if they're short, split if long
+          let current = '';
+          for (const sentence of sentences) {
+            if ((current + ' ' + sentence).length > targetLength && current) {
+              units.push(current.trim());
+              current = sentence;
+            } else {
+              current = current ? current + ' ' + sentence : sentence;
+            }
+          }
+          if (current) units.push(current.trim());
+        } else {
+          units.push(part);
+        }
       }
     }
   } else {
-    // Split by sentences
+    // Split by sentences for atomicity (REQUIREMENT 4: one assertion per unit)
     const sentences = text.split(/(?<=[.!?])\s+/);
     let current = '';
     for (const sentence of sentences) {
-      if ((current + ' ' + sentence).length > maxLength && current) {
+      // If adding this sentence would exceed target, emit current
+      if ((current + ' ' + sentence).length > targetLength && current) {
+        units.push(current.trim());
+        current = sentence;
+      } else if ((current + ' ' + sentence).length > maxLength && current) {
+        // Hard cap: must split
         units.push(current.trim());
         current = sentence;
       } else {
@@ -344,7 +410,7 @@ function atomizeUnit(text, unitType, maxLength = 800) {
     if (current) units.push(current.trim());
   }
   
-  return units.filter(u => u.length >= 50); // Minimum unit size
+  return units.filter(u => u.length >= 50 && u.length <= maxLength);
 }
 
 // REQUIREMENT 4: Extract canonical definitions as first-class units
@@ -403,8 +469,83 @@ function extractDefinitionUnits(sections, docId, url, docCleanText) {
   return units;
 }
 
+// REQUIREMENT 3: Truth gating - validate facts are grounded
+function validateFactGrounding(unit, schemas, html) {
+  // Check if unit is schema-grounded
+  if (unit.triple && unit.triple.source_jsonld_ref) {
+    // Verify the JSON pointer exists
+    for (const schema of schemas) {
+      const items = Array.isArray(schema['@graph']) ? schema['@graph'] : [schema];
+      for (const item of items) {
+        if (item['@id'] === unit.triple.source_jsonld_ref) {
+          return {
+            grounded: true,
+            grounding_type: 'schema',
+            confidence: 0.95,
+            source_pointer: unit.triple.source_jsonld_ref
+          };
+        }
+      }
+    }
+  }
+  
+  // Check if unit matches visible label-value patterns
+  const labelValuePatterns = [
+    /(?:phone|telephone|tel):\s*([+\d\s\-\(\)]+)/i,
+    /(?:address):\s*([^\n]+)/i,
+    /(?:hours|open|hours of operation):\s*([^\n]+)/i,
+    /(?:price|pricing|cost):\s*([^\n]+)/i
+  ];
+  
+  for (const pattern of labelValuePatterns) {
+    if (pattern.test(unit.clean_text)) {
+      return {
+        grounded: true,
+        grounding_type: 'visible_text',
+        confidence: 0.85,
+        source_pointer: 'label-value-pattern'
+      };
+    }
+  }
+  
+  // Check if it's a metadata-only fact (page-level only)
+  if (unit.unit_type === 'fact') {
+    const metadataFacts = ['title', 'description', 'canonical_url'];
+    if (unit.triple && metadataFacts.includes(unit.triple.predicate)) {
+      return {
+        grounded: true,
+        grounding_type: 'metadata',
+        confidence: 0.90,
+        source_pointer: 'page-metadata'
+      };
+    }
+  }
+  
+  // Not grounded - downgrade to claim
+  return {
+    grounded: false,
+    grounding_type: 'model_inferred',
+    confidence: 0.60,
+    source_pointer: null
+  };
+}
+
+// REQUIREMENT 1: Add SINR protocol fields to unit
+function addSINRFields(unit, section, grounding) {
+  const offsets = calculateUnitOffsets(unit, section);
+  
+  unit.parent_section_id = unit.section_id; // Explicit parent reference
+  unit.unit_offset_start = offsets.unit_offset_start;
+  unit.unit_offset_end = offsets.unit_offset_end;
+  unit.unit_grounding = grounding.grounding_type;
+  unit.unit_confidence = grounding.confidence;
+  unit.unit_source_pointer = grounding.source_pointer || null;
+  
+  return unit;
+}
+
 // REQUIREMENT 5: Normalize schema facts into triples
-function normalizeSchemaFacts(schemas, sections, docId, url, docCleanText) {
+function normalizeSchemaFacts(schemas, sections, docId, url, docCleanText, html) {
   const entities = [];
   const units = [];
   
@@ -427,11 +568,11 @@ function normalizeSchemaFacts(schemas, sections, docId, url, docCleanText) {
       if (!sections || sections.length === 0) continue;
       const firstSection = sections[0];
       
-      // Name
-      if (item.name) {
+      // Name (REQUIREMENT 3: Only emit if grounded)
+      if (item.name && item['@id']) {
         const factText = `${item.name} (${itemType}) name is ${item.name}.`;
         const unitId = generateId(url, 'fact', itemType, 'name', item.name);
-        units.push({
+        const unit = {
           unit_id: unitId,
           section_id: firstSection.section_id,
           doc_id: docId,
@@ -447,16 +588,30 @@ function normalizeSchemaFacts(schemas, sections, docId, url, docCleanText) {
             subject_type: itemType,
             predicate: 'name',
             object: item.name,
-            source_jsonld_ref: item['@id'] || ''
+            source_jsonld_ref: item['@id']
           }
-        });
+        };
+        
+        // REQUIREMENT 3: Validate grounding
+        const grounding = validateFactGrounding(unit, schemas, html);
+        if (grounding.grounded) {
+          // REQUIREMENT 1: Add SINR fields
+          addSINRFields(unit, firstSection, grounding);
+          units.push(unit);
+        } else {
+          // Downgrade to claim
+          unit.unit_type = 'claim';
+          unit.unit_confidence = grounding.confidence;
+          addSINRFields(unit, firstSection, grounding);
+          units.push(unit);
+        }
       }
       
-      // Telephone
+      // Telephone (REQUIREMENT 3: Validate grounding)
       if (item.telephone) {
         const factText = `${item.name || itemType} telephone is ${item.telephone}.`;
         const unitId = generateId(url, 'fact', itemType, 'telephone');
-        units.push({
+        const unit = {
           unit_id: unitId,
           section_id: firstSection.section_id,
           doc_id: docId,
@@ -474,16 +629,27 @@ function normalizeSchemaFacts(schemas, sections, docId, url, docCleanText) {
             object: item.telephone,
             source_jsonld_ref: item['@id'] || ''
           }
-        });
+        };
+        
+        const grounding = validateFactGrounding(unit, schemas, html);
+        if (grounding.grounded) {
+          addSINRFields(unit, firstSection, grounding);
+          units.push(unit);
+        } else {
+          unit.unit_type = 'claim';
+          unit.unit_confidence = grounding.confidence;
+          addSINRFields(unit, firstSection, grounding);
+          units.push(unit);
+        }
       }
       
-      // Founder
+      // Founder (REQUIREMENT 3: Validate grounding)
       if (item.founder) {
         const founderName = typeof item.founder === 'string' ? item.founder : (item.founder.name || '');
         if (founderName) {
           const factText = `${item.name || itemType} founder is ${founderName}.`;
           const unitId = generateId(url, 'fact', itemType, 'founder');
-          units.push({
+          const unit = {
             unit_id: unitId,
             section_id: firstSection.section_id,
             doc_id: docId,
@@ -501,16 +667,27 @@ function normalizeSchemaFacts(schemas, sections, docId, url, docCleanText) {
               object: founderName,
               source_jsonld_ref: item['@id'] || ''
             }
-          });
+          };
+          
+          const grounding = validateFactGrounding(unit, schemas, html);
+          if (grounding.grounded) {
+            addSINRFields(unit, firstSection, grounding);
+            units.push(unit);
+          } else {
+            unit.unit_type = 'claim';
+            unit.unit_confidence = grounding.confidence;
+            addSINRFields(unit, firstSection, grounding);
+            units.push(unit);
+          }
         }
       }
       
-      // SameAs
+      // SameAs (REQUIREMENT 3: Validate grounding)
       if (item.sameAs && Array.isArray(item.sameAs)) {
         for (const sameAsUrl of item.sameAs) {
           const factText = `${item.name || itemType} sameAs includes ${sameAsUrl}.`;
           const unitId = generateId(url, 'fact', itemType, 'sameAs', sameAsUrl);
-          units.push({
+          const unit = {
             unit_id: unitId,
             section_id: firstSection.section_id,
             doc_id: docId,
@@ -528,13 +705,78 @@ function normalizeSchemaFacts(schemas, sections, docId, url, docCleanText) {
               object: sameAsUrl,
               source_jsonld_ref: item['@id'] || ''
             }
-          });
+          };
+          
+          const grounding = validateFactGrounding(unit, schemas, html);
+          if (grounding.grounded) {
+            addSINRFields(unit, firstSection, grounding);
+            units.push(unit);
+          } else {
+            unit.unit_type = 'claim';
+            unit.unit_confidence = grounding.confidence;
+            addSINRFields(unit, firstSection, grounding);
+            units.push(unit);
+          }
         }
       }
     }
   }
   
   return { entities, units };
+}
+
+// REQUIREMENT 6: Enrichment 2.0 - Generate hierarchy, entity, and intent stamps
+function generateEnrichment20(unit, section, sections, entities, url, title) {
+  // Hierarchy stamp
+  const hierarchy = {
+    doc_title: title,
+    section_path: section?.section_path || '',
+    h1: sections.find(s => s.heading_level === 1)?.heading_text || '',
+    h2_chain: sections
+      .filter(s => s.heading_level === 2 && s.char_start <= (section?.char_start || 0))
+      .map(s => s.heading_text)
+      .slice(-2) // Last 2 H2s
+  };
+  
+  // Entity stamp (top entities from schema)
+  const topEntities = entities
+    .filter(e => e.entity_type === 'Organization' || e.entity_type === 'Person')
+    .slice(0, 3)
+    .map(e => ({ id: e.entity_id, name: e.name, type: e.entity_type }));
+  
+  // Intent stamp (HyDE-lite) - generate questions this unit answers
+  const answersQuestions = [];
+  if (unit.unit_type === 'definition') {
+    const term = unit.entity_refs?.[0] || '';
+    if (term) {
+      answersQuestions.push(`What is ${term}?`);
+      answersQuestions.push(`Define ${term}`);
+    }
+  } else if (unit.unit_type === 'faq_a') {
+    answersQuestions.push(unit.clean_text.substring(0, 100) + '?');
+  } else if (unit.unit_type === 'fact') {
+    const subject = unit.entity_refs?.[0] || '';
+    const predicate = unit.triple?.predicate || '';
+    if (subject && predicate) {
+      answersQuestions.push(`What is the ${predicate} of ${subject}?`);
+    }
+  }
+  
+  // Build enriched text for embedding
+  const hierarchyStamp = `DOC: ${hierarchy.doc_title} | PATH: ${hierarchy.section_path} | H1: ${hierarchy.h1} | H2: ${hierarchy.h2_chain.join(' > ')}`;
+  const entityStamp = topEntities.length > 0 
+    ? ` | ENTITIES: ${topEntities.map(e => e.name).join(', ')}`
+    : '';
+  const intentStamp = answersQuestions.length > 0
+    ? ` | ANSWERS: ${answersQuestions.join('; ')}`
+    : '';
+  
+  return {
+    hierarchy,
+    entities: topEntities,
+    answers_questions: answersQuestions,
+    enriched_text_for_embedding: `${hierarchyStamp}${entityStamp}${intentStamp} | TYPE: ${unit.unit_type} | TEXT: ${unit.clean_text}`
+  };
 }
 
 // REQUIREMENT 6: Add assertion frames (lowest inference format)
@@ -741,8 +983,8 @@ function extractClaimUnits(sections, docId, url, docCleanText) {
   return units;
 }
 
-// REQUIREMENT 9: Edge expansion beyond FAQ
-function generateExpandedEdges(units, sections) {
+// REQUIREMENT 7: Hop Graph beyond FAQ (real HopRAG)
+function generateExpandedEdges(units, sections, html, url) {
   const edges = [];
   
   const faqQuestions = units.filter(u => u.unit_type === 'faq_q');
@@ -751,11 +993,146 @@ function generateExpandedEdges(units, sections) {
   const facts = units.filter(u => u.unit_type === 'fact');
   const faqAnswers = units.filter(u => u.unit_type === 'faq_a');
   
+  // Build term dictionary from schema and headings
+  const termDictionary = new Map();
+  for (const def of definitions) {
+    for (const term of (def.entity_refs || [])) {
+      termDictionary.set(term.toLowerCase(), def.unit_id);
+    }
+  }
+  
+  // Extract bold/heading terms
+  const headingTerms = sections
+    .filter(s => s.heading_level <= 3)
+    .map(s => s.heading_text.toLowerCase());
+  headingTerms.forEach(term => {
+    if (!termDictionary.has(term) && term.length > 3) {
+      const matchingDef = definitions.find(d => 
+        d.clean_text.toLowerCase().includes(term)
+      );
+      if (matchingDef) {
+        termDictionary.set(term, matchingDef.unit_id);
+      }
+    }
+  });
+  
+  // Edge type: defines (DefinedTerm → definition)
+  for (const def of definitions) {
+    for (const term of (def.entity_refs || [])) {
+      const termLower = term.toLowerCase();
+      const mentions = units.filter(u => 
+        u.clean_text.toLowerCase().includes(termLower) && 
+        u.unit_id !== def.unit_id
+      );
+      for (const mention of mentions) {
+        edges.push({
+          from_unit_id: mention.unit_id,
+          to_unit_id: def.unit_id,
+          edge_type: 'defines',
+          edge_label: `defines ${term}`,
+          confidence: 0.85
+        });
+      }
+    }
+  }
+  
+  // Edge type: supports (claim → supporting fact/schema)
+  for (const claim of claims) {
+    const claimLower = claim.clean_text.toLowerCase();
+    for (const fact of facts) {
+      const factEntities = (fact.entity_refs || []).map(e => e.toLowerCase());
+      if (factEntities.some(entity => claimLower.includes(entity))) {
+        edges.push({
+          from_unit_id: claim.unit_id,
+          to_unit_id: fact.unit_id,
+          edge_type: 'supports',
+          edge_label: 'supported_by',
+          confidence: 0.75
+        });
+      }
+    }
+  }
+  
+  // Edge type: mentions (unit → entity id)
+  for (const unit of units) {
+    if (unit.entity_refs && unit.entity_refs.length > 0) {
+      for (const entityRef of unit.entity_refs) {
+        const entityFacts = facts.filter(f => 
+          f.entity_refs && f.entity_refs.includes(entityRef)
+        );
+        for (const fact of entityFacts) {
+          edges.push({
+            from_unit_id: unit.unit_id,
+            to_unit_id: fact.unit_id,
+            edge_type: 'mentions',
+            edge_label: `mentions ${entityRef}`,
+            confidence: 0.80
+          });
+        }
+      }
+    }
+  }
+  
+  // Edge type: depends_on (claim → prerequisite definition)
+  for (const claim of claims) {
+    const claimLower = claim.clean_text.toLowerCase();
+    for (const [term, defId] of termDictionary.entries()) {
+      if (claimLower.includes(term)) {
+        edges.push({
+          from_unit_id: claim.unit_id,
+          to_unit_id: defId,
+          edge_type: 'depends_on',
+          edge_label: `depends_on ${term}`,
+          confidence: 0.70
+        });
+      }
+    }
+  }
+  
+  // Edge type: links_to (section → target section based on internal links)
+  if (html && url) {
+    const internalLinks = new Map();
+    const linkRegex = /<a[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gi;
+    let linkMatch;
+    while ((linkMatch = linkRegex.exec(html)) !== null) {
+      const href = linkMatch[1];
+      const text = linkMatch[2].replace(/<[^>]*>/g, '').trim();
+      try {
+        const linkUrl = new URL(href, url);
+        if (linkUrl.origin === new URL(url).origin && text) {
+          internalLinks.set(text.toLowerCase(), linkUrl.pathname);
+        }
+      } catch {
+        // Invalid URL, skip
+      }
+    }
+    
+    for (const section of sections) {
+      const sectionLower = section.clean_text.toLowerCase();
+      for (const [linkText, targetPath] of internalLinks.entries()) {
+        if (sectionLower.includes(linkText)) {
+          const targetSection = sections.find(s => 
+            s.heading_text.toLowerCase().includes(linkText.substring(0, 20))
+          );
+          if (targetSection && targetSection.section_id !== section.section_id) {
+            edges.push({
+              from_unit_id: section.section_id,
+              to_unit_id: targetSection.section_id,
+              edge_type: 'links_to',
+              edge_label: `links_to ${linkText}`,
+              confidence: 0.65
+            });
+          }
+        }
+      }
+    }
+  }
+  
   // FAQ Q -> Definition (elaborates)
   for (const faq of faqQuestions) {
     const questionLower = faq.clean_text.toLowerCase();
     for (const def of definitions) {
-      const defTerms = def.entity_refs.map(e => e.toLowerCase());
+      const defTerms = (def.entity_refs || []).map(e => e.toLowerCase());
       if (defTerms.some(term => questionLower.includes(term))) {
         edges.push({
           from_unit_id: faq.unit_id,
@@ -772,7 +1149,7 @@ function generateExpandedEdges(units, sections) {
   for (const answer of faqAnswers) {
     const answerLower = answer.clean_text.toLowerCase();
     for (const def of definitions) {
-      const defTerms = def.entity_refs.map(e => e.toLowerCase());
+      const defTerms = (def.entity_refs || []).map(e => e.toLowerCase());
       if (defTerms.some(term => answerLower.includes(term))) {
         edges.push({
           from_unit_id: answer.unit_id,
@@ -782,53 +1159,6 @@ function generateExpandedEdges(units, sections) {
           confidence: 0.80
         });
       }
-    }
-  }
-  
-  // Claim -> Definition (defines)
-  for (const claim of claims) {
-    const claimLower = claim.clean_text.toLowerCase();
-    for (const def of definitions) {
-      const defTerms = def.entity_refs.map(e => e.toLowerCase());
-      if (defTerms.some(term => claimLower.includes(term))) {
-        edges.push({
-          from_unit_id: claim.unit_id,
-          to_unit_id: def.unit_id,
-          edge_type: 'defines',
-          edge_label: 'defines',
-          confidence: 0.75
-        });
-      }
-    }
-  }
-  
-  // Claim -> Fact (supported_by)
-  for (const claim of claims) {
-    const claimLower = claim.clean_text.toLowerCase();
-    for (const fact of facts) {
-      if (fact.entity_refs.some(entity => claimLower.includes(entity.toLowerCase()))) {
-        edges.push({
-          from_unit_id: claim.unit_id,
-          to_unit_id: fact.unit_id,
-          edge_type: 'supported_by',
-          edge_label: 'supported_by',
-          confidence: 0.70
-        });
-      }
-    }
-  }
-  
-  // Definition -> Section (located_in)
-  for (const def of definitions) {
-    const section = sections.find(s => s.section_id === def.section_id);
-    if (section) {
-      edges.push({
-        from_unit_id: def.unit_id,
-        to_unit_id: section.section_id, // Using section_id as target
-        edge_type: 'located_in',
-        edge_label: 'located_in',
-        confidence: 1.0
-      });
     }
   }
   
@@ -990,7 +1320,142 @@ function generateViews(sections, units, intendedUsers, url) {
   return views;
 }
 
-// REQUIREMENT 11: QA metrics
+// REQUIREMENT 8: Vertical shaping via schema-first adapters
+function detectVertical(schemas) {
+  const verticalScores = {
+    ecommerce: 0,
+    local_services: 0,
+    healthcare: 0,
+    recruiting: 0,
+    media: 0,
+    saas: 0,
+    research: 0
+  };
+  
+  for (const schema of schemas) {
+    const items = Array.isArray(schema['@graph']) ? schema['@graph'] : [schema];
+    for (const item of items) {
+      const itemType = Array.isArray(item['@type']) ? item['@type'][0] : item['@type'];
+      
+      if (['Product', 'Offer'].includes(itemType)) {
+        verticalScores.ecommerce += 3;
+      }
+      if (['LocalBusiness', 'Service'].includes(itemType)) {
+        verticalScores.local_services += 3;
+      }
+      if (['MedicalBusiness', 'Physician'].includes(itemType)) {
+        verticalScores.healthcare += 3;
+      }
+      if (['JobPosting'].includes(itemType)) {
+        verticalScores.recruiting += 3;
+      }
+      if (['Article', 'NewsArticle'].includes(itemType)) {
+        verticalScores.media += 3;
+      }
+      if (['SoftwareApplication'].includes(itemType)) {
+        verticalScores.saas += 3;
+      }
+      if (['ScholarlyArticle', 'Report', 'ResearchOrganization'].includes(itemType)) {
+        verticalScores.research += 3;
+      }
+    }
+  }
+  
+  const maxScore = Math.max(...Object.values(verticalScores));
+  if (maxScore === 0) return { vertical: 'general', confidence: 0 };
+  
+  const detectedVertical = Object.entries(verticalScores)
+    .find(([_, score]) => score === maxScore)?.[0] || 'general';
+  
+  return {
+    vertical: detectedVertical,
+    confidence: Math.min(maxScore / 5, 1.0),
+    scores: verticalScores
+  };
+}
+
+// REQUIREMENT 9: Citations Guarantee QA gate
+function runQAGate(units, sections, docCleanText, boilerplateSignals) {
+  const errors = [];
+  const fixSuggestions = [];
+  
+  // Check grounded fact rate
+  const facts = units.filter(u => u.unit_type === 'fact');
+  const groundedFacts = facts.filter(f => 
+    f.unit_grounding === 'schema' || 
+    f.unit_grounding === 'visible_text' || 
+    f.unit_grounding === 'metadata'
+  ).length;
+  const groundedFactRate = facts.length > 0 ? groundedFacts / facts.length : 1.0;
+  
+  if (groundedFactRate < 0.95) {
+    errors.push(`grounded_fact_rate too low: ${groundedFactRate.toFixed(2)} (required: >= 0.95)`);
+    fixSuggestions.push('Review fact extraction - ensure all facts are schema-grounded or visible-text-grounded');
+  }
+  
+  // Check ungrounded facts
+  const ungroundedFacts = facts.filter(f => 
+    f.unit_grounding === 'model_inferred' || !f.unit_grounding
+  ).length;
+  
+  if (ungroundedFacts > 0) {
+    errors.push(`ungrounded_fact_count: ${ungroundedFacts} (required: 0)`);
+    fixSuggestions.push('Downgrade ungrounded facts to claims with lower confidence');
+  }
+  
+  // Check unit length (target range by type)
+  const avgLengths = {};
+  for (const unitType of ['fact', 'definition', 'claim', 'faq_a']) {
+    const typeUnits = units.filter(u => u.unit_type === unitType);
+    if (typeUnits.length > 0) {
+      const avgLength = typeUnits.reduce((sum, u) => sum + u.clean_text.length, 0) / typeUnits.length;
+      avgLengths[unitType] = avgLength;
+      
+      // Target: 120-350 chars
+      if (avgLength > 500) {
+        errors.push(`${unitType} avg_length too high: ${avgLength.toFixed(0)} chars (target: 120-350)`);
+        fixSuggestions.push(`Atomize ${unitType} units further`);
+      }
+    }
+  }
+  
+  // Check atomicity (no multi-claim units)
+  const multiClaimUnits = units.filter(u => {
+    const sentences = u.clean_text.split(/[.!?]\s+/).length;
+    return sentences > 2 && u.unit_type === 'claim';
+  }).length;
+  const atomicityPassRate = units.length > 0 ? 1 - (multiClaimUnits / units.length) : 1.0;
+  
+  if (atomicityPassRate < 0.9) {
+    errors.push(`atomicity_pass_rate too low: ${atomicityPassRate.toFixed(2)} (required: >= 0.9)`);
+    fixSuggestions.push('Split multi-claim units into single-assertion units');
+  }
+  
+  // Check schema coverage
+  const schemaUnits = units.filter(u => u.unit_grounding === 'schema').length;
+  const schemaCoverageScore = units.length > 0 ? schemaUnits / units.length : 0;
+  
+  // Check hop graph density
+  const hopGraphDensity = units.length > 0 ? 0 : 0; // Will be calculated from edges
+  
+  const qualityReport = {
+    grounded_fact_rate: groundedFactRate,
+    ungrounded_fact_count: ungroundedFacts,
+    avg_unit_length_tokens: avgLengths,
+    atomicity_pass_rate: atomicityPassRate,
+    schema_coverage_score: schemaCoverageScore,
+    hop_graph_density: hopGraphDensity,
+    errors: errors.length > 0 ? errors : undefined,
+    fix_suggestions: fixSuggestions.length > 0 ? fixSuggestions : undefined
+  };
+  
+  return {
+    passed: errors.length === 0,
+    quality_report: qualityReport
+  };
+}
+
+// REQUIREMENT 11: QA metrics (enhanced)
 function computeQAMetrics(sections, units, docCleanText, boilerplateSignals) {
   const totalChars = docCleanText.length;
   const removedChars = boilerplateSignals.removed_fragments.join(' ').length;
@@ -999,10 +1464,15 @@ function computeQAMetrics(sections, units, docCleanText, boilerplateSignals) {
   const unitsUnderCap = units.filter(u => u.clean_text.length <= 800).length;
   const unitAtomizationScore = units.length > 0 ? unitsUnderCap / units.length : 0;
   
-  const unitsWithOffsets = units.filter(u => u.char_start !== undefined && u.char_end !== undefined).length;
+  const unitsWithOffsets = units.filter(u => 
+    u.char_start !== undefined && 
+    u.char_end !== undefined &&
+    u.unit_offset_start !== undefined &&
+    u.unit_offset_end !== undefined
+  ).length;
   const provenanceCoverage = units.length > 0 ? unitsWithOffsets / units.length : 0;
   
-  // Check for near-duplicates (simplified)
+  // Check for near-duplicates
   const unitTexts = units.map(u => u.clean_text.toLowerCase().substring(0, 100));
   const uniqueTexts = new Set(unitTexts);
   const duplicateUnitRate = units.length > 0 ? (units.length - uniqueTexts.size) / units.length : 0;
@@ -1046,8 +1516,8 @@ function extractContentUniversal(html, baseUrl) {
   const definitionUnits = extractDefinitionUnits(sections, docId, baseUrl, docCleanText);
   units.push(...definitionUnits);
   
-  // 2. Normalize schema facts (REQUIREMENT 5)
-  const { entities, units: schemaUnits } = normalizeSchemaFacts(structured_data, sections, docId, baseUrl, docCleanText);
+  // 2. Normalize schema facts (REQUIREMENT 5) with truth gating (REQUIREMENT 3)
+  const { entities, units: schemaUnits } = normalizeSchemaFacts(structured_data, sections, docId, baseUrl, docCleanText, html);
   units.push(...schemaUnits);
   
   // 3. Extract FAQ units (atomized)
@@ -1060,16 +1530,46 @@ function extractContentUniversal(html, baseUrl) {
   const claimUnits = extractClaimUnits(sections, docId, baseUrl, docCleanText);
   units.push(...claimUnits);
   
-  // 5. Add assertion frames to all units (REQUIREMENT 6)
+  // 5. Add SINR fields, enrichment 2.0, and assertion frames to all units
   for (const unit of units) {
     const section = sections.find(s => s.section_id === unit.section_id);
-    if (section && !unit.assertion) {
-      unit.assertion = createAssertionFrame(unit, section, baseUrl, contentHash);
+    if (section) {
+      // REQUIREMENT 1: Add SINR protocol fields if not already present
+      if (!unit.parent_section_id) {
+        // REQUIREMENT 3: Validate grounding for facts
+        let grounding;
+        if (unit.unit_type === 'fact') {
+          grounding = validateFactGrounding(unit, structured_data, html);
+          // If fact is not grounded, downgrade to claim
+          if (!grounding.grounded) {
+            unit.unit_type = 'claim';
+            unit.unit_confidence = grounding.confidence;
+          }
+        } else {
+          grounding = {
+            grounded: false,
+            grounding_type: 'model_inferred',
+            confidence: unit.unit_type === 'definition' ? 0.85 : 0.70,
+            source_pointer: null
+          };
+        }
+        addSINRFields(unit, section, grounding);
+      }
+      
+      // REQUIREMENT 6: Add Enrichment 2.0
+      const enrichment = generateEnrichment20(unit, section, sections, entities, baseUrl, title);
+      unit.enrichment = enrichment;
+      unit.enriched_text_for_embedding = enrichment.enriched_text_for_embedding;
+      
+      // Add assertion frame
+      if (!unit.assertion) {
+        unit.assertion = createAssertionFrame(unit, section, baseUrl, contentHash);
+      }
     }
   }
   
-  // 6. Generate expanded edges (REQUIREMENT 9)
-  const expandedEdges = generateExpandedEdges(units, sections);
+  // 6. Generate expanded edges (REQUIREMENT 7: Hop Graph beyond FAQ)
+  const expandedEdges = generateExpandedEdges(units, sections, html, baseUrl);
   edges.push(...expandedEdges);
   
   // 7. Infer intended users (REQUIREMENT 7)
@@ -1078,23 +1578,31 @@ function extractContentUniversal(html, baseUrl) {
   // 8. Generate views (REQUIREMENT 8)
   const views = generateViews(sections, units, intendedUsers, baseUrl);
   
-  // 9. Compute QA metrics (REQUIREMENT 11)
+  // 7. Detect vertical (REQUIREMENT 8)
+  const vertical = detectVertical(structured_data);
+  
+  // 8. Compute QA metrics (REQUIREMENT 11)
   const qa = computeQAMetrics(sections, units, docCleanText, boilerplateSignals);
+  
+  // 9. Run QA gate (REQUIREMENT 9: Citations Guarantee)
+  const qaGate = runQAGate(units, sections, docCleanText, boilerplateSignals);
   
   return {
     doc_id: docId,
     title,
     meta,
     structured_data,
-    doc_clean_text: docCleanText, // REQUIREMENT 1
+    doc_clean_text: docCleanText, // REQUIREMENT 1 & 2
     boilerplate_signals: boilerplateSignals, // REQUIREMENT 2
     entities, // REQUIREMENT 5
     intended_users: intendedUsers, // REQUIREMENT 7
+    vertical, // REQUIREMENT 8
     views, // REQUIREMENT 8
     sections,
     units,
     edges,
-    qa // REQUIREMENT 11
+    qa, // REQUIREMENT 11
+    qa_gate: qaGate // REQUIREMENT 9
   };
 }
 
@@ -1151,9 +1659,16 @@ export async function ingestUrl(req, res) {
     // Extract content with all upgrades
     const extractedContent = extractContentUniversal(html, canonicalUrl);
     const contentHash = computeContentHash(extractedContent);
+    
+    // REQUIREMENT 9: Check QA gate - if failed, return ok: false
+    const ok = extractedContent.qa_gate.passed;
 
     res.json({
-      ok: true,
+      ok,
+      ...(ok ? {} : {
+        errors: extractedContent.qa_gate.quality_report.errors,
+        fix_suggestions: extractedContent.qa_gate.quality_report.fix_suggestions
+      }),
       data: {
         domain,
         source_url: canonicalUrl,
@@ -1171,8 +1686,10 @@ export async function ingestUrl(req, res) {
         boilerplate_signals: extractedContent.boilerplate_signals,
         entities: extractedContent.entities,
         intended_users: extractedContent.intended_users,
+        vertical: extractedContent.vertical,
         views: extractedContent.views,
         qa: extractedContent.qa,
+        quality_report: extractedContent.qa_gate.quality_report,
         fetched_at: new Date().toISOString()
       }
     });
