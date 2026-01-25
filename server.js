@@ -85,7 +85,25 @@ function requireAuth(req, res, next) {
   next();
 }
 
-app.get("/health", (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
+app.get("/health", async (_req, res) => {
+  try {
+    // Quick database ping
+    await pool.query("SELECT 1");
+    res.json({ 
+      ok: true, 
+      ts: new Date().toISOString(),
+      database: "connected"
+    });
+  } catch (error) {
+    // Database might be down, but server is running
+    res.status(503).json({ 
+      ok: false, 
+      ts: new Date().toISOString(),
+      database: "disconnected",
+      error: error.message 
+    });
+  }
+});
 
 // Optional Redis test endpoint
 app.get("/health/redis", async (_req, res) => {
@@ -665,5 +683,71 @@ app.post("/v1/chat", requireAuth, rateLimit, async (req, res) => {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use("/runtime", express.static(path.join(__dirname, "runtime")));
 
-const port = process.env.PORT || 8080;
-app.listen(port, "0.0.0.0", () => console.log("precogs-api listening on", port));
+// Test database connection on startup
+async function testDatabaseConnection() {
+  try {
+    const result = await pool.query("SELECT NOW()");
+    console.log("[startup] Database connection OK:", result.rows[0].now);
+    return true;
+  } catch (error) {
+    console.error("[startup] Database connection FAILED:", error.message);
+    console.error("[startup] DATABASE_URL:", process.env.DATABASE_URL ? "SET" : "NOT SET");
+    return false;
+  }
+}
+
+// Test Redis connection on startup (optional)
+async function testRedisConnection() {
+  try {
+    if (!process.env.REDIS_URL) {
+      console.log("[startup] Redis: Not configured (REDIS_URL not set)");
+      return true; // Redis is optional
+    }
+    const { testRedis } = await import("./src/redis.js");
+    const result = await testRedis();
+    console.log("[startup] Redis connection:", result ? "OK" : "FAILED");
+    return result;
+  } catch (error) {
+    console.error("[startup] Redis connection error:", error.message);
+    return false; // Non-fatal, continue anyway
+  }
+}
+
+// Startup sequence
+async function startServer() {
+  console.log("[startup] Starting precogs-api...");
+  console.log("[startup] NODE_ENV:", process.env.NODE_ENV || "development");
+  console.log("[startup] PORT:", process.env.PORT || "8080");
+
+  // Test database (required)
+  const dbOk = await testDatabaseConnection();
+  if (!dbOk) {
+    console.error("[startup] FATAL: Database connection failed. Server will start but may fail on requests.");
+    // Continue anyway - some endpoints might work
+  }
+
+  // Test Redis (optional)
+  await testRedisConnection();
+
+  const port = process.env.PORT || 8080;
+  app.listen(port, "0.0.0.0", () => {
+    console.log("[startup] ✅ precogs-api listening on port", port);
+    console.log("[startup] Health check: http://localhost:" + port + "/health");
+  });
+
+  // Handle uncaught errors
+  process.on("uncaughtException", (error) => {
+    console.error("[fatal] Uncaught exception:", error);
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason, promise) => {
+    console.error("[fatal] Unhandled rejection at:", promise, "reason:", reason);
+    process.exit(1);
+  });
+}
+
+startServer().catch((error) => {
+  console.error("[fatal] Startup failed:", error);
+  process.exit(1);
+});
