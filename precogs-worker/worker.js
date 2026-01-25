@@ -234,6 +234,10 @@ async function processJob(jobId, precog, prompt, context, retryCount = 0) {
             for (const schema of schemas) {
               const schemaType = schema["@type"] || (Array.isArray(schema["@type"]) ? schema["@type"][0] : "Unknown");
               const normalizedType = Array.isArray(schemaType) ? schemaType[0] : schemaType;
+              const typeToUse = type || normalizedType;
+              
+              // Get rules for this schema type
+              const rules = typeToUse ? kbData.types[typeToUse] : null;
               
               // Check if type matches requested type (if specified)
               if (type && normalizedType !== type) {
@@ -243,10 +247,21 @@ async function processJob(jobId, precog, prompt, context, retryCount = 0) {
                 continue;
               }
               
+              if (!rules) {
+                await insertEvent(jobId, "answer.delta", {
+                  text: `⚠️ No KB rules found for @type=${typeToUse || "unknown"}. Available types: ${Object.keys(kbData.types).join(", ")}\n\n`,
+                });
+                // Still output the schema
+                await insertEvent(jobId, "answer.delta", {
+                  text: `📦 JSON-LD:\n\`\`\`json\n${JSON.stringify(schema, null, 2)}\n\`\`\`\n`,
+                });
+                continue;
+              }
+              
               // Validate against rules
               const issues = validateJsonLdAgainstRules(schema, rules);
               const recommendations = buildRecommendations(schema, rules);
-              const output = prettyPrintResult(normalizedType, issues, recommendations, schema);
+              const output = prettyPrintResult(typeToUse, issues, recommendations, schema);
               
               await insertEvent(jobId, "answer.delta", {
                 text: output,
