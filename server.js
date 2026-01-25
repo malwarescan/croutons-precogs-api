@@ -64,6 +64,11 @@ const corsOptions = process.env.NODE_ENV === "production"
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));
 
+// Verification routes (for Croutons domain verification)
+import { initiateVerification, checkVerification } from "./src/routes/verify.js";
+app.post('/v1/verify/initiate', initiateVerification);
+app.post('/v1/verify/check', checkVerification);
+
 // Bearer token authentication middleware (optional, enabled via API_KEY env var)
 function requireAuth(req, res, next) {
   const apiKey = process.env.API_KEY;
