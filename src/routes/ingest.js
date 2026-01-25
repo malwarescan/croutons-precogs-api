@@ -269,10 +269,16 @@ function extractSections(html, url, docId, boilerplateSignals) {
 
 // REQUIREMENT 1: Build doc_clean_text and fix provenance offsets
 function buildDocCleanText(sections) {
+  if (!sections || sections.length === 0) {
+    return '';
+  }
+  
   const docParts = [];
   let cursor = 0;
   
   for (const section of sections) {
+    if (!section || !section.clean_text) continue;
+    
     const sectionStart = cursor;
     docParts.push(section.clean_text);
     const sectionEnd = cursor + section.clean_text.length;
@@ -418,8 +424,8 @@ function normalizeSchemaFacts(schemas, sections, docId, url, docCleanText) {
       });
       
       // Extract facts as triples
+      if (!sections || sections.length === 0) continue;
       const firstSection = sections[0];
-      if (!firstSection) continue;
       
       // Name
       if (item.name) {
@@ -534,17 +540,17 @@ function normalizeSchemaFacts(schemas, sections, docId, url, docCleanText) {
 // REQUIREMENT 6: Add assertion frames (lowest inference format)
 function createAssertionFrame(unit, section, url, contentHash) {
   const assertion = {
-    subject: unit.entity_refs[0] || '',
+    subject: (unit.entity_refs && unit.entity_refs.length > 0) ? unit.entity_refs[0] : '',
     predicate: '',
     object: '',
     qualifiers: [],
     modality: 'is',
-    scope: section.section_path,
+    scope: section?.section_path || '',
     provenance: {
       url,
-      section_id: section.section_id,
-      char_start: unit.char_start,
-      char_end: unit.char_end,
+      section_id: section?.section_id || '',
+      char_start: unit.char_start || 0,
+      char_end: unit.char_end || 0,
       content_hash: contentHash
     }
   };
@@ -609,10 +615,14 @@ function extractFAQUnits(schemas, sections, docId, url, docCleanText, contentHas
               const answerParts = atomizeUnit(answerText, 'faq_a', 350);
               
               // Find best matching section
-              const faqSection = sections.find(s => 
-                s.heading_text.toLowerCase().includes('question') ||
-                s.heading_text.toLowerCase().includes('faq')
-              ) || sections[0];
+              const faqSection = sections && sections.length > 0 ? (
+                sections.find(s => 
+                  s.heading_text && (
+                    s.heading_text.toLowerCase().includes('question') ||
+                    s.heading_text.toLowerCase().includes('faq')
+                  )
+                ) || sections[0]
+              ) : null;
               
               if (faqSection) {
                 const qId = generateId(url, 'faq_q', questionText);
@@ -916,6 +926,10 @@ function generateViews(sections, units, intendedUsers, url) {
   // Always generate research_view, support_view, buyer_view
   const viewTypes = ['research_view', 'support_view', 'buyer_view'];
   
+  // Safety checks
+  if (!sections) sections = [];
+  if (!units) units = [];
+  
   for (const viewType of viewTypes) {
     const viewUnits = {
       identity: [],
@@ -927,35 +941,36 @@ function generateViews(sections, units, intendedUsers, url) {
     };
     
     // Identity (entities + core facts)
-    const facts = units.filter(u => u.unit_type === 'fact');
-    viewUnits.identity = facts.map(u => u.unit_id);
+    const facts = units.filter(u => u && u.unit_type === 'fact');
+    viewUnits.identity = facts.map(u => u.unit_id).filter(Boolean);
     
     // Definitions
-    const definitions = units.filter(u => u.unit_type === 'definition');
-    viewUnits.definitions = definitions.map(u => u.unit_id);
+    const definitions = units.filter(u => u && u.unit_type === 'definition');
+    viewUnits.definitions = definitions.map(u => u.unit_id).filter(Boolean);
     
     // Key claims
-    const claims = units.filter(u => u.unit_type === 'claim');
-    viewUnits.key_claims = claims.map(u => u.unit_id);
+    const claims = units.filter(u => u && u.unit_type === 'claim');
+    viewUnits.key_claims = claims.map(u => u.unit_id).filter(Boolean);
     
     // FAQs
-    const faqQs = units.filter(u => u.unit_type === 'faq_q');
-    const faqAs = units.filter(u => u.unit_type === 'faq_a');
+    const faqQs = units.filter(u => u && u.unit_type === 'faq_q');
+    const faqAs = units.filter(u => u && u.unit_type === 'faq_a');
     const faqPairs = [];
     for (const q of faqQs) {
+      if (!q || !q.section_id) continue;
       // Find corresponding answer (simplified - in reality would use edges)
       const relatedAs = faqAs.filter(a => 
-        a.section_id === q.section_id && 
-        a.char_start > q.char_end
+        a && a.section_id === q.section_id && 
+        a.char_start > (q.char_end || 0)
       );
-      if (relatedAs.length > 0) {
+      if (relatedAs && relatedAs.length > 0 && relatedAs[0].unit_id) {
         faqPairs.push({ q_unit_id: q.unit_id, a_unit_id: relatedAs[0].unit_id });
       }
     }
     viewUnits.faqs = faqPairs;
     
     // Supporting sections (all sections for now)
-    viewUnits.supporting_sections = sections.map(s => s.section_id);
+    viewUnits.supporting_sections = sections.map(s => s && s.section_id ? s.section_id : null).filter(Boolean);
     
     // Actions (extracted from CTAs - simplified)
     viewUnits.actions = [];
@@ -963,7 +978,7 @@ function generateViews(sections, units, intendedUsers, url) {
     views[viewType] = {
       audience_id: viewType,
       summary_1_sentence: `${viewType.replace('_view', '')} view of ${url}`,
-      key_entities: facts.map(f => f.entity_refs[0]).filter(Boolean),
+      key_entities: facts.map(f => (f.entity_refs && f.entity_refs.length > 0) ? f.entity_refs[0] : null).filter(Boolean),
       definitions: viewUnits.definitions,
       key_claims: viewUnits.key_claims,
       faqs: viewUnits.faqs,
