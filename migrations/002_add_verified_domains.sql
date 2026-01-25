@@ -1,7 +1,10 @@
 -- migrations/002_add_verified_domains.sql
 -- Add verified domains table for publisher verification
 
-CREATE TABLE IF NOT EXISTS verified_domains (
+-- Drop and recreate to ensure correct schema (if table exists with wrong schema)
+DROP TABLE IF EXISTS verified_domains CASCADE;
+
+CREATE TABLE verified_domains (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   domain VARCHAR(255) UNIQUE NOT NULL,
   verification_token VARCHAR(64) NOT NULL,
