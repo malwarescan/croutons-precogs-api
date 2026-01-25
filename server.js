@@ -743,6 +743,27 @@ async function runVerifiedDomainsMigration() {
   }
 }
 
+// Run html_snapshots migration on startup
+async function runHtmlSnapshotsMigration() {
+  try {
+    console.log("[startup] Running html_snapshots migration...");
+    const { readFileSync } = await import("fs");
+    const { fileURLToPath } = await import("url");
+    const { dirname, join } = await import("path");
+    
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const migrationPath = join(__dirname, "migrations", "003_add_html_snapshots.sql");
+    const sql = readFileSync(migrationPath, "utf8");
+    
+    await pool.query(sql);
+    console.log("[startup] ✅ html_snapshots migration applied");
+  } catch (error) {
+    // Don't fail startup if migration fails (might already be applied)
+    console.error("[startup] html_snapshots migration error (non-fatal):", error.message);
+  }
+}
+
 // Startup sequence
 async function startServer() {
   console.log("[startup] Starting precogs-api...");
@@ -755,8 +776,9 @@ async function startServer() {
     console.error("[startup] FATAL: Database connection failed. Server will start but may fail on requests.");
     // Continue anyway - some endpoints might work
   } else {
-    // Run migration if database is connected
+    // Run migrations if database is connected
     await runVerifiedDomainsMigration();
+    await runHtmlSnapshotsMigration();
   }
 
   // Test Redis (optional)
