@@ -5,8 +5,8 @@
 import crypto from 'crypto';
 import { parse } from 'node-html-parser';
 import { pool } from '../db.js';
-import { loadKB } from '../../../../precogs-worker/src/kb.js';
-import { validateJsonLdAgainstRules, buildRecommendations } from '../../../../precogs-worker/src/validateSchema.js';
+import { loadKB } from '../../precogs-worker/src/kb.js';
+import { validateJsonLdAgainstRules, buildRecommendations } from '../../precogs-worker/src/validateSchema.js';
 
 // Generate deterministic ID from components
 function generateId(...components) {
