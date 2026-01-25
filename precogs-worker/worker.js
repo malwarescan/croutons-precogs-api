@@ -45,6 +45,10 @@ function extractJSONLD(content) {
   try {
     const parsed = JSON.parse(content);
     if (parsed["@type"] || parsed["@context"]) {
+      // Handle @graph - extract each item separately
+      if (parsed["@graph"] && Array.isArray(parsed["@graph"])) {
+        return parsed["@graph"];
+      }
       return [parsed];
     }
   } catch (e) {
@@ -57,7 +61,13 @@ function extractJSONLD(content) {
   let match;
   while ((match = jsonLdRegex.exec(content)) !== null) {
     try {
-      matches.push(JSON.parse(match[1]));
+      const parsed = JSON.parse(match[1]);
+      // Handle @graph - extract each item separately
+      if (parsed["@graph"] && Array.isArray(parsed["@graph"])) {
+        matches.push(...parsed["@graph"]);
+      } else {
+        matches.push(parsed);
+      }
     } catch (e) {
       console.warn("[worker] Failed to parse JSON-LD:", e.message);
     }
