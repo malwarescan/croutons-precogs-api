@@ -718,6 +718,27 @@ async function testRedisConnection() {
   }
 }
 
+// Run verified_domains migration on startup
+async function runVerifiedDomainsMigration() {
+  try {
+    console.log("[startup] Running verified_domains migration...");
+    const { readFileSync } = await import("fs");
+    const { fileURLToPath } = await import("url");
+    const { dirname, join } = await import("path");
+    
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const migrationPath = join(__dirname, "migrations", "002_add_verified_domains.sql");
+    const sql = readFileSync(migrationPath, "utf8");
+    
+    await pool.query(sql);
+    console.log("[startup] ✅ verified_domains migration applied");
+  } catch (error) {
+    // Don't fail startup if migration fails (might already be applied)
+    console.error("[startup] Migration error (non-fatal):", error.message);
+  }
+}
+
 // Startup sequence
 async function startServer() {
   console.log("[startup] Starting precogs-api...");
@@ -729,6 +750,9 @@ async function startServer() {
   if (!dbOk) {
     console.error("[startup] FATAL: Database connection failed. Server will start but may fail on requests.");
     // Continue anyway - some endpoints might work
+  } else {
+    // Run migration if database is connected
+    await runVerifiedDomainsMigration();
   }
 
   // Test Redis (optional)
