@@ -2184,37 +2184,51 @@ function generateMarkdown(extractedContent, sourceUrl, contentHash) {
 
 // Generate and store markdown in markdown_versions table
 async function generateAndStoreMarkdown(domain, sourceUrl, extractedContent, contentHash) {
+  console.log(`[generateAndStoreMarkdown] Starting for ${domain} -> ${sourceUrl}`);
   const path = derivePath(sourceUrl);
+  console.log(`[generateAndStoreMarkdown] Derived path: ${path}`);
+  
   const markdownContent = generateMarkdown(extractedContent, sourceUrl, contentHash);
+  console.log(`[generateAndStoreMarkdown] Generated markdown (${markdownContent.length} chars)`);
   
   // Hash the markdown content for content_hash
   const markdownHash = crypto.createHash('sha256').update(markdownContent).digest('hex');
+  console.log(`[generateAndStoreMarkdown] Content hash: ${markdownHash.substring(0, 12)}...`);
+  
+  if (!pool) {
+    throw new Error('Database pool not available');
+  }
   
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    console.log(`[generateAndStoreMarkdown] Transaction started`);
     
     // 1) Deactivate prior active versions for (domain, path)
-    await client.query(`
+    const deactivateResult = await client.query(`
       UPDATE markdown_versions 
       SET is_active = false 
       WHERE domain = $1 AND path = $2 AND is_active = true
     `, [domain, path]);
+    console.log(`[generateAndStoreMarkdown] Deactivated ${deactivateResult.rowCount} prior version(s)`);
     
     // 2) Insert new version with is_active=true
-    await client.query(`
+    const insertResult = await client.query(`
       INSERT INTO markdown_versions (domain, path, content, content_hash, generated_at, is_active)
       VALUES ($1, $2, $3, $4, NOW(), TRUE)
       ON CONFLICT (domain, path, content_hash) 
       DO UPDATE SET
         is_active = TRUE,
         updated_at = NOW()
+      RETURNING id, domain, path, is_active
     `, [domain, path, markdownContent, markdownHash]);
     
     await client.query('COMMIT');
-    console.log(`[ingest] ✅ Markdown generated and stored for ${domain}/${path}`);
+    console.log(`[generateAndStoreMarkdown] ✅ Markdown stored: id=${insertResult.rows[0]?.id}, domain=${domain}, path=${path}, is_active=${insertResult.rows[0]?.is_active}`);
   } catch (error) {
     await client.query('ROLLBACK');
+    console.error(`[generateAndStoreMarkdown] ❌ Error:`, error.message);
+    console.error(`[generateAndStoreMarkdown] Stack:`, error.stack);
     throw error;
   } finally {
     client.release();
@@ -2314,11 +2328,16 @@ export async function ingestUrl(req, res) {
     // Generate and store markdown if ingestion passed
     if (ok) {
       try {
+        console.log(`[ingest] Generating markdown for ${domain} -> ${canonicalUrl}`);
         await generateAndStoreMarkdown(domain, canonicalUrl, extractedContent, contentHash);
+        console.log(`[ingest] ✅ Markdown generation completed for ${domain}`);
       } catch (markdownError) {
         // Log but don't fail ingestion if markdown generation fails
         console.error('[ingest] Markdown generation error (non-fatal):', markdownError.message);
+        console.error('[ingest] Markdown generation stack:', markdownError.stack);
       }
+    } else {
+      console.log(`[ingest] Skipping markdown generation - QA gate failed for ${domain}`);
     }
 
     res.json({
