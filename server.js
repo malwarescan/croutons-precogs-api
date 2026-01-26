@@ -773,6 +773,27 @@ async function runHtmlSnapshotsMigration() {
   }
 }
 
+// Run discovered_pages migration on startup
+async function runDiscoveredPagesMigration() {
+  try {
+    console.log("[startup] Running discovered_pages migration...");
+    const { readFileSync } = await import("fs");
+    const { fileURLToPath } = await import("url");
+    const { dirname, join } = await import("path");
+    
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = dirname(__filename);
+    const migrationPath = join(__dirname, "migrations", "015_add_discovered_pages.sql");
+    const sql = readFileSync(migrationPath, "utf8");
+    
+    await pool.query(sql);
+    console.log("[startup] ✅ discovered_pages migration applied");
+  } catch (error) {
+    // Don't fail startup if migration fails (might already be applied)
+    console.error("[startup] discovered_pages migration error (non-fatal):", error.message);
+  }
+}
+
 // Startup sequence
 async function startServer() {
   console.log("[startup] Starting precogs-api...");
@@ -788,6 +809,7 @@ async function startServer() {
     // Run migrations if database is connected
     await runVerifiedDomainsMigration();
     await runHtmlSnapshotsMigration();
+    await runDiscoveredPagesMigration();
   }
 
   // Test Redis (optional)
