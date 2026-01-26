@@ -73,6 +73,15 @@ app.post('/v1/verify/check', checkVerification);
 import { ingestUrl } from "./src/routes/ingest.js";
 app.post('/v1/ingest', ingestUrl);
 
+// Discovery routes (webhook-first discovery system)
+import { discoverPage } from "./src/routes/discover.js";
+app.post('/v1/discover', discoverPage);
+
+// Scanner routes (scheduled safety net)
+import { runScanner } from "./src/routes/scanner.js";
+app.get('/v1/scanner/run', runScanner);
+app.post('/v1/scanner/run', runScanner);
+
 // Bearer token authentication middleware (optional, enabled via API_KEY env var)
 function requireAuth(req, res, next) {
   const apiKey = process.env.API_KEY;

@@ -99,7 +99,10 @@ export async function checkVerification(req, res) {
       });
     }
 
-    // Check DNS TXT record
+    // Check DNS TXT record first (primary method)
+    let verified = false;
+    let method = null;
+    
     try {
       const txtRecords = await dns.resolveTxt(domain);
       const expectedRecord = `croutons-verification=${verification_token}`;
@@ -108,36 +111,61 @@ export async function checkVerification(req, res) {
       const flatRecords = txtRecords.flat();
       const found = flatRecords.some(record => record === expectedRecord);
       
-      if (!found) {
-        return res.status(400).json({
-          domain,
-          status: 'failed',
-          error: 'TXT record not found or incorrect',
-          expected: expectedRecord,
-          found: flatRecords
-        });
+      if (found) {
+        verified = true;
+        method = 'dns';
       }
-
-      // Mark as verified
-      await pool.query(
-        'UPDATE verified_domains SET verified_at = NOW(), updated_at = NOW() WHERE domain = $1',
-        [domain]
-      );
-
-      res.json({
-        domain,
-        status: 'verified',
-        verified_at: new Date().toISOString()
-      });
-
     } catch (dnsError) {
+      // DNS failed, try HTTP well-known fallback
+      console.log(`[verify] DNS check failed for ${domain}, trying HTTP fallback`);
+    }
+
+    // HTTP well-known fallback (if DNS didn't work)
+    if (!verified) {
+      try {
+        const wellKnownUrl = `https://${domain}/.well-known/croutons-verification.txt`;
+        const response = await fetch(wellKnownUrl, {
+          headers: { 'User-Agent': 'Croutons-Verifier/1.0' },
+          signal: AbortSignal.timeout(5000)
+        });
+
+        if (response.ok) {
+          const content = await response.text();
+          if (content.trim() === verification_token) {
+            verified = true;
+            method = 'http';
+          }
+        }
+      } catch (httpError) {
+        // HTTP fallback also failed
+      }
+    }
+
+    if (!verified) {
       return res.status(400).json({
         domain,
-        status: 'dns_error',
-        error: 'DNS lookup failed',
-        details: dnsError.message
+        status: 'failed',
+        error: 'Verification failed',
+        details: 'Neither DNS TXT record nor HTTP well-known file matched',
+        instructions: {
+          dns: `Add DNS TXT record: croutons-verification=${verification_token}`,
+          http: `Or create file at https://${domain}/.well-known/croutons-verification.txt with content: ${verification_token}`
+        }
       });
     }
+
+    // Mark as verified
+    await pool.query(
+      'UPDATE verified_domains SET verified_at = NOW(), updated_at = NOW() WHERE domain = $1',
+      [domain]
+    );
+
+    res.json({
+      domain,
+      status: 'verified',
+      method,
+      verified_at: new Date().toISOString()
+    });
 
   } catch (error) {
     console.error('Verification check error:', error);
