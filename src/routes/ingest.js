@@ -2299,16 +2299,23 @@ function generateMarkdown(extractedContent, sourceUrl, contentHash) {
     service: `${baseUrl}/#service-primary`
   };
   
-  // Build frontmatter with language detection
+  // Protocol v1.1: Build frontmatter with all required fields
+  const mirrorPath = derivePath(sourceUrl);
+  const mirrorUrl = `https://md.croutons.ai/${domain}/${mirrorPath}.md`;
+  
   const frontmatter = [
     '---',
-    `title: "${title.replace(/"/g, '\\"')}"`,
+    `protocol_version: "1.1"`,
+    `mirror_of: "${sourceUrl}"`,
+    `canonical_mirror: "${mirrorUrl}"`,
     `source_url: "${sourceUrl}"`,
     `source_domain: "${domain}"`,
-    `generated_by: "croutons.ai"`,
+    `title: "${title.replace(/"/g, '\\"')}"`,
     `generated_at: "${generatedAt}"`,
     `content_hash: "${contentHash}"`,
     `language: "${extractedContent.language || 'en'}"`,
+    `extraction_method: "${extractedContent.extraction_method || 'croutons-readability-v1'}"`,
+    `extraction_text_hash: "${extractedContent.extraction_text_hash || ''}"`,
     'entities:',
     `  org_id: "${entityIds.org}"`,
     `  website_id: "${entityIds.website}"`,
@@ -2430,39 +2437,57 @@ function generateMarkdown(extractedContent, sourceUrl, contentHash) {
     markdown += '\n';
   }
 
-  // === ATOMIC FACTS ===
-  const facts = (extractedContent.units || []).filter(u => 
-    u.unit_type === 'fact' || u.unit_type === 'claim'
-  );
+  // === ATOMIC FACTS (Protocol v1.1) ===
+  // Use ALL units (not just facts/claims) and render with v1.1 evidence
+  const units = extractedContent.units || [];
   
-  if (facts.length > 0) {
-    markdown += '## Facts (Atomic)\n\n';
-    const factSet = new Set();
+  if (units.length > 0) {
+    markdown += '## Facts (Protocol v1.1)\n\n';
+    markdown += '_Each fact includes deterministic evidence anchors for citation verification._\n\n';
     
-    for (const fact of facts) {
-      const text = (fact.clean_text || fact.text || '').trim();
+    for (const unit of units) {
+      const text = (unit.text || '').trim();
       if (!text || text.length < 10) continue;
       
-      // Split long sentences into atomic units
-      const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
-      for (let sentence of sentences) {
-        sentence = sentence.trim();
-        if (sentence.length < 10) continue;
+      // Skip units without v1.1 identity
+      if (!unit.slot_id || !unit.fact_id) continue;
+      
+      // Entity ID (use triple.subject if available, otherwise page)
+      const subjectId = unit.triple?.subject || entityIds.page;
+      const predicate = unit.triple?.predicate || 'states';
+      const object = unit.triple?.object || text;
+      
+      // Fact triple
+      markdown += `${subjectId} | ${predicate} | ${object}\n`;
+      
+      // Protocol v1.1 metadata
+      markdown += `meta | slot_id | ${unit.slot_id}\n`;
+      markdown += `meta | fact_id | ${unit.fact_id}\n`;
+      markdown += `meta | revision | ${unit.revision || 1}\n`;
+      
+      // Evidence anchor (machine-readable)
+      if (unit.evidence_anchor && !unit.anchor_missing) {
+        const ea = unit.evidence_anchor;
+        const evidenceJson = JSON.stringify({
+          char_start: ea.char_start,
+          char_end: ea.char_end,
+          fragment_hash: ea.fragment_hash,
+          extraction_text_hash: ea.extraction_text_hash
+        });
+        markdown += `evidence | anchor | ${evidenceJson}\n`;
         
-        // Add evidence pointer if available
-        const evidence = fact.evidence_heading_path || fact.section_heading || '';
-        if (evidence) {
-          factSet.add(`${entityIds.page} | states | ${sentence} [evidence: ${evidence}]`);
-        } else {
-          factSet.add(`${entityIds.page} | states | ${sentence}`);
+        // Supporting text (exact substring from canonical extraction)
+        if (unit.supporting_text) {
+          const escapedText = unit.supporting_text.replace(/\n/g, ' ').trim();
+          markdown += `evidence | supporting_text | ${escapedText}\n`;
         }
+      } else {
+        // Mark as non-citation-grade if anchor is missing
+        markdown += `meta | anchor_missing | true\n`;
       }
+      
+      markdown += '\n';
     }
-    
-    for (const fact of Array.from(factSet).sort()) {
-      markdown += `${fact}\n`;
-    }
-    markdown += '\n';
   }
 
   // === FAQ ===

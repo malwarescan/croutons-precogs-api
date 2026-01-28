@@ -91,6 +91,10 @@ app.get('/v1/facts.ndjson', getAllFactsStream);
 import { getEntityGraph } from "./src/routes/graph.js";
 app.get('/v1/graph/:domain.jsonld', getEntityGraph);
 
+// Status endpoint (Protocol v1.1)
+import { getStatus } from "./src/routes/status.js";
+app.get('/v1/status/:domain', getStatus);
+
 // Bearer token authentication middleware (optional, enabled via API_KEY env var)
 function requireAuth(req, res, next) {
   const apiKey = process.env.API_KEY;
