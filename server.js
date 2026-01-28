@@ -136,6 +136,23 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+// Debug endpoint: check applied migrations
+app.get("/debug/migrations", async (_req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT filename, applied_at 
+      FROM precogs.schema_migrations 
+      ORDER BY applied_at DESC
+    `);
+    res.json({ 
+      ok: true,
+      migrations: result.rows
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 // Debug endpoint: check croutons table status
 app.get("/debug/croutons", async (_req, res) => {
   try {
