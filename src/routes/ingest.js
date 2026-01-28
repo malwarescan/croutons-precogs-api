@@ -2709,7 +2709,17 @@ export async function ingestUrl(req, res) {
     }
 
     // Protocol v1.1: Store all units in croutons table for facts stream
-    let croutonsStorageStatus = { attempted: false, success: false, error: null, count: 0 };
+    let croutonsStorageStatus = { 
+      attempted: false, 
+      success: false, 
+      error: null, 
+      count: 0,
+      debug: {
+        hasUnits: !!extractedContent.units,
+        unitsLength: extractedContent.units ? extractedContent.units.length : null,
+        unitsType: typeof extractedContent.units
+      }
+    };
     if (extractedContent.units && extractedContent.units.length > 0) {
       croutonsStorageStatus.attempted = true;
       try {
