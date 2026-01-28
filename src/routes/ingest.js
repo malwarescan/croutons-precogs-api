@@ -2779,6 +2779,9 @@ export async function ingestUrl(req, res) {
             object: object
           };
           
+          // BLOCKER FIX #5: Ensure text is non-null (required by schema)
+          const text = unit.text || object;
+          
           // BLOCKER FIX #2: Schema-qualify table name
           // BLOCKER FIX #1: Use rowCount + xmax to track actual DB operations
           const insertResult = await pool.query(`
@@ -2789,6 +2792,8 @@ export async function ingestUrl(req, res) {
               confidence, verified_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
             ON CONFLICT (crouton_id) DO UPDATE SET
+              domain = EXCLUDED.domain,
+              source_url = EXCLUDED.source_url,
               text = EXCLUDED.text,
               triple = EXCLUDED.triple,
               previous_fact_id = public.croutons.fact_id,
@@ -2805,7 +2810,7 @@ export async function ingestUrl(req, res) {
             croutonId,
             domain,
             canonicalUrl,
-            unit.text,
+            text,  // BLOCKER FIX: Use non-null text (object fallback)
             JSON.stringify(triple),
             unit.slot_id,
             unit.fact_id,
