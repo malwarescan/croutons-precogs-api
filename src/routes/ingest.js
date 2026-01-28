@@ -2717,7 +2717,9 @@ export async function ingestUrl(req, res) {
       debug: {
         hasUnits: !!extractedContent.units,
         unitsLength: extractedContent.units ? extractedContent.units.length : null,
-        unitsType: typeof extractedContent.units
+        unitsType: typeof extractedContent.units,
+        isArray: Array.isArray(extractedContent.units),
+        firstUnitExists: extractedContent.units && extractedContent.units[0] ? true : false
       }
     };
     if (extractedContent.units && extractedContent.units.length > 0) {

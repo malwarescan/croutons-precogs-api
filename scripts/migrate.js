@@ -48,7 +48,8 @@ const pool = new Pool({
       "003_add_html_snapshots.sql",
       "015_add_discovered_pages.sql",
       "016_protocol_v1_1.sql",
-      "017_create_croutons_table.sql"
+      "017_create_croutons_table.sql",
+      "018_fix_croutons_schema.sql"
     ];
 
     let appliedCount = 0;
