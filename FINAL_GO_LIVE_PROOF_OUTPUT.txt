@@ -1,0 +1,39 @@
+================================================================
+FINAL GO LIVE PROOF BUNDLE FOR FULL PROTOCOL v1.1
+================================================================
+
+Target domain: nrlc.ai
+Target URL: https://nrlc.ai/
+
+Waiting for service to be healthy...
+[1/30] Waiting... (service not ready)
+[2/30] Waiting... (service not ready)
+[3/30] Waiting... (service not ready)
+[4/30] Waiting... (service not ready)
+[5/30] Waiting... (service not ready)
+[6/30] Waiting... (service not ready)
+[7/30] Waiting... (service not ready)
+[8/30] Waiting... (service not ready)
+[9/30] Waiting... (service not ready)
+[10/30] Waiting... (service not ready)
+[11/30] Waiting... (service not ready)
+[12/30] Waiting... (service not ready)
+[13/30] Waiting... (service not ready)
+[14/30] Waiting... (service not ready)
+[15/30] Waiting... (service not ready)
+[16/30] Waiting... (service not ready)
+[17/30] Waiting... (service not ready)
+[18/30] Waiting... (service not ready)
+[19/30] Waiting... (service not ready)
+[20/30] Waiting... (service not ready)
+[21/30] Waiting... (service not ready)
+[22/30] Waiting... (service not ready)
+[23/30] Waiting... (service not ready)
+[24/30] Waiting... (service not ready)
+[25/30] Waiting... (service not ready)
+[26/30] Waiting... (service not ready)
+[27/30] Waiting... (service not ready)
+[28/30] Waiting... (service not ready)
+[29/30] Waiting... (service not ready)
+[30/30] Waiting... (service not ready)
+❌ Service did not become healthy. Aborting.
