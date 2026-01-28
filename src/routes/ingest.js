@@ -2284,11 +2284,10 @@ function derivePath(sourceUrl) {
   }
 }
 
-// Generate markdown from extracted content
-function generateMarkdown(extractedContent, sourceUrl, contentHash) {
+// Generate markdown from extracted content + STORED units (Protocol v1.1)
+async function generateMarkdown(extractedContent, sourceUrl, contentHash, domain) {
   const title = extractedContent.title || '';
   const generatedAt = new Date().toISOString();
-  const domain = new URL(sourceUrl).hostname;
   const baseUrl = `https://${domain}`;
   
   // Generate stable entity IDs
@@ -2438,24 +2437,41 @@ function generateMarkdown(extractedContent, sourceUrl, contentHash) {
   }
 
   // === ATOMIC FACTS (Protocol v1.1) ===
-  // Use ALL units (not just facts/claims) and render with v1.1 evidence
-  const units = extractedContent.units || [];
+  // Query STORED units from croutons table (not extractedContent.units)
+  // This ensures mirror reflects actual stored facts, not ephemeral extraction output
+  let storedUnits = [];
+  try {
+    const unitsResult = await pool.query(`
+      SELECT 
+        triple,
+        slot_id,
+        fact_id,
+        revision,
+        supporting_text,
+        evidence_anchor
+      FROM public.croutons
+      WHERE domain = $1 AND source_url = $2
+      ORDER BY updated_at DESC
+      LIMIT 1000
+    `, [domain, sourceUrl]);
+    storedUnits = unitsResult.rows;
+  } catch (err) {
+    console.error('[generateMarkdown] Failed to query stored units:', err.message);
+    // Fall back to empty if query fails
+  }
   
-  if (units.length > 0) {
+  if (storedUnits.length > 0) {
     markdown += '## Facts (Protocol v1.1)\n\n';
     markdown += '_Each fact includes deterministic evidence anchors for citation verification._\n\n';
     
-    for (const unit of units) {
-      const text = (unit.text || '').trim();
-      if (!text || text.length < 10) continue;
+    for (const unit of storedUnits) {
+      // Parse triple from stored JSONB
+      const triple = typeof unit.triple === 'object' ? unit.triple : JSON.parse(unit.triple || '{}');
+      const subjectId = triple.subject || entityIds.page;
+      const predicate = triple.predicate || 'states';
+      const object = triple.object || '';
       
-      // Skip units without v1.1 identity
-      if (!unit.slot_id || !unit.fact_id) continue;
-      
-      // Entity ID (use triple.subject if available, otherwise page)
-      const subjectId = unit.triple?.subject || entityIds.page;
-      const predicate = unit.triple?.predicate || 'states';
-      const object = unit.triple?.object || text;
+      if (!object || !unit.slot_id || !unit.fact_id) continue;
       
       // Fact triple
       markdown += `${subjectId} | ${predicate} | ${object}\n`;
@@ -2466,13 +2482,13 @@ function generateMarkdown(extractedContent, sourceUrl, contentHash) {
       markdown += `meta | revision | ${unit.revision || 1}\n`;
       
       // Evidence anchor (machine-readable)
-      if (unit.evidence_anchor && !unit.anchor_missing) {
-        const ea = unit.evidence_anchor;
+      const evidenceAnchor = typeof unit.evidence_anchor === 'object' ? unit.evidence_anchor : JSON.parse(unit.evidence_anchor || 'null');
+      if (evidenceAnchor && evidenceAnchor.char_start != null) {
         const evidenceJson = JSON.stringify({
-          char_start: ea.char_start,
-          char_end: ea.char_end,
-          fragment_hash: ea.fragment_hash,
-          extraction_text_hash: ea.extraction_text_hash
+          char_start: evidenceAnchor.char_start,
+          char_end: evidenceAnchor.char_end,
+          fragment_hash: evidenceAnchor.fragment_hash,
+          extraction_text_hash: evidenceAnchor.extraction_text_hash
         });
         markdown += `evidence | anchor | ${evidenceJson}\n`;
         
@@ -2561,7 +2577,8 @@ async function generateAndStoreMarkdown(domain, sourceUrl, extractedContent, con
   const path = derivePath(sourceUrl);
   console.log(`[generateAndStoreMarkdown] Derived path: ${path}`);
   
-  const markdownContent = generateMarkdown(extractedContent, sourceUrl, contentHash);
+  // Protocol v1.1: Generate markdown from STORED units, not extractedContent.units
+  const markdownContent = await generateMarkdown(extractedContent, sourceUrl, contentHash, domain);
   console.log(`[generateAndStoreMarkdown] Generated markdown (${markdownContent.length} chars)`);
   
   // Hash the markdown content for content_hash
