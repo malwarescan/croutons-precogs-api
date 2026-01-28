@@ -132,6 +132,59 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+// Debug endpoint: check croutons table status
+app.get("/debug/croutons", async (_req, res) => {
+  try {
+    // Check if table exists
+    const tableCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_name = 'croutons'
+      );
+    `);
+    const tableExists = tableCheck.rows[0].exists;
+    
+    if (!tableExists) {
+      return res.json({ 
+        ok: false,
+        tableExists: false,
+        message: "croutons table does not exist"
+      });
+    }
+    
+    // Count total rows
+    const countResult = await pool.query('SELECT COUNT(*) FROM croutons');
+    const totalCount = parseInt(countResult.rows[0].count);
+    
+    // Get sample row if any exist
+    let sampleRow = null;
+    if (totalCount > 0) {
+      const sampleResult = await pool.query('SELECT * FROM croutons LIMIT 1');
+      sampleRow = sampleResult.rows[0];
+    }
+    
+    res.json({ 
+      ok: true,
+      tableExists: true,
+      totalCount,
+      sampleRow: sampleRow ? {
+        id: sampleRow.id,
+        domain: sampleRow.domain,
+        slot_id: sampleRow.slot_id ? sampleRow.slot_id.substring(0, 16) + '...' : null,
+        fact_id: sampleRow.fact_id ? sampleRow.fact_id.substring(0, 16) + '...' : null,
+        has_evidence_anchor: !!sampleRow.evidence_anchor,
+        has_supporting_text: !!sampleRow.supporting_text
+      } : null
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      ok: false, 
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 // Optional Redis test endpoint
 app.get("/health/redis", async (_req, res) => {
   try {
