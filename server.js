@@ -156,11 +156,15 @@ app.get("/debug/croutons", async (_req, res) => {
     const countResult = await pool.query('SELECT COUNT(*) FROM croutons');
     const totalCount = parseInt(countResult.rows[0].count);
     
-    // Get sample row if any exist
+    // Get sample rows (most recent and oldest)
     let sampleRow = null;
+    let mostRecentRow = null;
     if (totalCount > 0) {
       const sampleResult = await pool.query('SELECT * FROM croutons LIMIT 1');
       sampleRow = sampleResult.rows[0];
+      
+      const recentResult = await pool.query('SELECT * FROM croutons ORDER BY created_at DESC LIMIT 1');
+      mostRecentRow = recentResult.rows[0];
     }
     
     res.json({ 
@@ -174,6 +178,16 @@ app.get("/debug/croutons", async (_req, res) => {
         fact_id: sampleRow.fact_id ? sampleRow.fact_id.substring(0, 16) + '...' : null,
         has_evidence_anchor: !!sampleRow.evidence_anchor,
         has_supporting_text: !!sampleRow.supporting_text
+      } : null,
+      mostRecentRow: mostRecentRow ? {
+        id: mostRecentRow.id,
+        domain: mostRecentRow.domain,
+        source_url: mostRecentRow.source_url,
+        slot_id: mostRecentRow.slot_id ? mostRecentRow.slot_id.substring(0, 16) + '...' : null,
+        fact_id: mostRecentRow.fact_id ? mostRecentRow.fact_id.substring(0, 16) + '...' : null,
+        has_evidence_anchor: !!mostRecentRow.evidence_anchor,
+        has_supporting_text: !!mostRecentRow.supporting_text,
+        created_at: mostRecentRow.created_at
       } : null
     });
   } catch (error) {
