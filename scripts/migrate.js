@@ -47,7 +47,8 @@ const pool = new Pool({
       "002_add_verified_domains.sql",
       "003_add_html_snapshots.sql",
       "015_add_discovered_pages.sql",
-      "016_protocol_v1_1.sql"
+      "016_protocol_v1_1.sql",
+      "017_create_croutons_table.sql"
     ];
 
     let appliedCount = 0;

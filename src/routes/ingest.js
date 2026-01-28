@@ -2708,6 +2708,66 @@ export async function ingestUrl(req, res) {
       console.log(`[ingest] Skipping markdown generation - QA gate failed for ${domain}`);
     }
 
+    // Protocol v1.1: Store all units in croutons table for facts stream
+    if (extractedContent.units && extractedContent.units.length > 0) {
+      try {
+        console.log(`[ingest] Storing ${extractedContent.units.length} units to croutons table...`);
+        
+        for (const unit of extractedContent.units) {
+          // Generate crouton_id (legacy ID field)
+          const croutonId = crypto.createHash('sha256')
+            .update(`${domain}|${canonicalUrl}|${unit.text}|${Date.now()}`)
+            .digest('hex').substring(0, 16);
+          
+          // Extract entity_id from triple or use default
+          const entityId = unit.triple?.subject || `https://${domain}/#org`;
+          const predicate = unit.triple?.predicate || 'states';
+          const object = unit.triple?.object || unit.text;
+          
+          await pool.query(`
+            INSERT INTO croutons (
+              crouton_id, domain, source_url, text, triple,
+              slot_id, fact_id, previous_fact_id, revision,
+              supporting_text, evidence_anchor, extraction_text_hash,
+              confidence, verified_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+            ON CONFLICT (crouton_id) DO UPDATE SET
+              text = EXCLUDED.text,
+              triple = EXCLUDED.triple,
+              slot_id = EXCLUDED.slot_id,
+              fact_id = EXCLUDED.fact_id,
+              previous_fact_id = EXCLUDED.previous_fact_id,
+              revision = EXCLUDED.revision,
+              supporting_text = EXCLUDED.supporting_text,
+              evidence_anchor = EXCLUDED.evidence_anchor,
+              extraction_text_hash = EXCLUDED.extraction_text_hash,
+              confidence = EXCLUDED.confidence,
+              verified_at = NOW(),
+              updated_at = NOW()
+          `, [
+            croutonId,
+            domain,
+            canonicalUrl,
+            unit.text,
+            JSON.stringify(unit.triple || null),
+            unit.slot_id || null,
+            unit.fact_id || null,
+            unit.previous_fact_id || null,
+            unit.revision || 1,
+            unit.supporting_text || null,
+            JSON.stringify(unit.evidence_anchor || null),
+            extractedContent.extraction_text_hash || null,
+            unit.confidence || 0.5
+          ]);
+        }
+        
+        console.log(`[ingest] ✅ Stored ${extractedContent.units.length} units to croutons table`);
+      } catch (croutonsError) {
+        // Log but don't fail ingestion if croutons storage fails
+        console.error('[ingest] Croutons storage error (non-fatal):', croutonsError.message);
+      }
+    }
+
     res.json({
       ok,
       ...(ok ? {} : {
