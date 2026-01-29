@@ -48,6 +48,18 @@ export async function getStatus(req, res) {
       });
     }
     
+    // Compute last_ingested_at if null (from latest html_snapshots.fetched_at)
+    let lastIngestedAt = verifiedRow.last_ingested_at;
+    if (!lastIngestedAt) {
+      const ingestQuery = await pool.query(
+        `SELECT MAX(fetched_at) as last_ingested_at
+         FROM public.html_snapshots
+         WHERE domain = $1`,
+        [domain]
+      );
+      lastIngestedAt = ingestQuery.rows[0]?.last_ingested_at || null;
+    }
+    
     // 2. Check markdown versions (mirrors) - PHASE D: Detect markdown_version from content
     const markdownQuery = await pool.query(
       `SELECT 
@@ -178,12 +190,18 @@ export async function getStatus(req, res) {
     // 8. Count unique entities (estimate from structured_data)
     const entitiesCount = graphNonempty ? 3 : 0; // Rough estimate: org, website, page
     
+    // Compute protocol_version based on actual tier + versions (not hardcoded)
+    const protocol_version = 
+      (factsVersion === '1.1' && markdownVersion === '1.1' && qaTier === 'full_protocol')
+        ? '1.1'
+        : '1.0';
+    
     // Build response
     const status = {
       domain,
       verified: true,
-      last_ingested_at: verifiedRow.last_ingested_at || null,
-      protocol_version: verifiedRow.protocol_version || markdownVersion,
+      last_ingested_at: lastIngestedAt,
+      protocol_version: protocol_version,
       
       versions: {
         markdown: markdownVersion,

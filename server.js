@@ -95,9 +95,9 @@ app.get('/v1/graph/:domain.jsonld', getEntityGraph);
 import { getStatus } from "./src/routes/status.js";
 app.get('/v1/status/:domain', getStatus);
 
-// Extract validation endpoint (PHASE E)
+// Extract validation endpoint (PHASE E) - Rate-limited (most expensive)
 import { getExtract } from "./src/routes/extract.js";
-app.get('/v1/extract/:domain', getExtract);
+app.get('/v1/extract/:domain', rateLimit, getExtract);
 
 // Bearer token authentication middleware (optional, enabled via API_KEY env var)
 function requireAuth(req, res, next) {
