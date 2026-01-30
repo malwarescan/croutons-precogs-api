@@ -57,7 +57,11 @@ const corsOptions = process.env.NODE_ENV === "production"
   ? {
       origin: process.env.CORS_ORIGIN
         ? process.env.CORS_ORIGIN.split(",")
-        : ["https://precogs.croutons.ai"],
+        : [
+            "https://precogs.croutons.ai",
+            "https://croutons.ai",
+            "https://www.croutons.ai"
+          ],
       credentials: true,
     }
   : { origin: true, credentials: true };
@@ -68,6 +72,10 @@ app.use(express.json({ limit: "1mb" }));
 import { initiateVerification, checkVerification } from "./src/routes/verify.js";
 app.post('/v1/verify/initiate', initiateVerification);
 app.post('/v1/verify/check', checkVerification);
+
+// Audit routes (LLM Readiness Audit)
+import { auditPage } from "./src/routes/audit.js";
+app.post('/v1/audit', rateLimit, auditPage);
 
 // Ingestion routes
 import { ingestUrl } from "./src/routes/ingest.js";
